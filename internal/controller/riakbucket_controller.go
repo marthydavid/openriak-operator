@@ -38,7 +38,8 @@ const riakBucketFinalizerName = "riak.openriak.io/bucket-finalizer"
 // RiakBucketReconciler reconciles a RiakBucket object
 type RiakBucketReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Executor *riak.Executor // if nil, a real executor is created per reconcile
 }
 
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakbuckets,verbs=get;list;watch;create;update;patch;delete
@@ -53,6 +54,17 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	bucket := &riakv1.RiakBucket{}
 	if err := r.Get(ctx, req.NamespacedName, bucket); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Handle deletion
+	if !bucket.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(bucket, riakBucketFinalizerName) {
+			controllerutil.RemoveFinalizer(bucket, riakBucketFinalizerName)
+			if err := r.Update(ctx, bucket); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Add finalizer if not present
@@ -91,7 +103,10 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Create bucket
-	executor := riak.NewExecutor(log)
+	executor := r.Executor
+	if executor == nil {
+		executor = riak.NewExecutor(log)
+	}
 	manager := riak.NewManager(executor, r.Client, log)
 
 	bucketType := bucket.Spec.BucketType

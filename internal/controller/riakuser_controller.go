@@ -39,7 +39,8 @@ const riakUserFinalizerName = "riak.openriak.io/user-finalizer"
 // RiakUserReconciler reconciles a RiakUser object
 type RiakUserReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Executor *riak.Executor // if nil, a real executor is created per reconcile
 }
 
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakusers,verbs=get;list;watch;create;update;patch;delete
@@ -55,6 +56,17 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	user := &riakv1.RiakUser{}
 	if err := r.Get(ctx, req.NamespacedName, user); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// Handle deletion
+	if !user.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(user, riakUserFinalizerName) {
+			controllerutil.RemoveFinalizer(user, riakUserFinalizerName)
+			if err := r.Update(ctx, user); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Add finalizer if not present
@@ -128,7 +140,10 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// Create user
-	executor := riak.NewExecutor(log)
+	executor := r.Executor
+	if executor == nil {
+		executor = riak.NewExecutor(log)
+	}
 	manager := riak.NewManager(executor, r.Client, log)
 
 	if err := manager.CreateUser(ctx, cluster, user.Spec.Username, password); err != nil {
@@ -142,12 +157,7 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Grant permissions
 	for _, grant := range user.Spec.Grants {
-		resource := grant.Resource
-		if resource == "" {
-			resource = "any"
-		}
-
-		if err := manager.GrantUserPermission(ctx, cluster, user.Spec.Username, resource, grant.Permission, grant.BucketName); err != nil {
+		if err := manager.GrantUserPermission(ctx, cluster, user.Spec.Username, grant.Resource, grant.Permission, grant.BucketName); err != nil {
 			log.Error(err, "failed to grant permission", "user", user.Spec.Username, "permission", grant.Permission)
 		}
 	}
