@@ -111,7 +111,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 
 	image := cluster.Spec.Image
 	if image == "" {
-		image = "riak/riak:latest"
+		image = "openriak/riak:3.2.6"
 	}
 
 	pullPolicy := cluster.Spec.ImagePullPolicy
@@ -136,6 +136,12 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 			Name: "POD_IP",
 			ValueFrom: &corev1.EnvVarSource{
 				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+			},
+		},
+		{
+			Name: "POD_NAMESPACE",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 			},
 		},
 		{

@@ -5,7 +5,7 @@ metadata:
   namespace: riak-system
 spec:
   size: 5
-  image: riak/riak:3.0.0
+  image: openriak/riak:3.2.6
   imagePullPolicy: IfNotPresent
   
   resources:
