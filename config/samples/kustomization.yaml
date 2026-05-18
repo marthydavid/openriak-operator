@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- riak_v1_riakcluster.yaml
+- riak_v1_riakbucket.yaml
+- riak_v1_riakuser.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

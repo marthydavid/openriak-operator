@@ -1,0 +1,28 @@
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: riak-cluster-dev
+  namespace: default
+spec:
+  size: 3
+  image: riak/riak:latest
+  imagePullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  
+  storageClassName: standard
+  storageSize: 10Gi
+  servicePort: 8087
+  
+  riakConfig:
+    "ring_size": "64"
+    "transfer_limit": "2"
+    "handoff_port": "8099"
+  
+  nodeSelector: {}

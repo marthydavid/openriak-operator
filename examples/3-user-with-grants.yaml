@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-user-secret
+  namespace: default
+type: Opaque
+data:
+  password: Y2hhbmdlbWUxMjM=  # changeme123 in base64
+---
+apiVersion: riak.openriak.io/v1
+kind: RiakUser
+metadata:
+  name: app-user
+  namespace: default
+spec:
+  clusterName: riak-cluster-dev
+  username: appuser
+  passwordSecret:
+    name: app-user-secret
+    key: password
+  grants:
+    - resource: any
+      permission: read
+    - resource: any
+      permission: write

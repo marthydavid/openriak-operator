@@ -1,0 +1,23 @@
+# permissions for end users to view riakusers.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: agents-riak-operator-kubernetes-lifecycle
+    app.kubernetes.io/managed-by: kustomize
+  name: riakuser-viewer-role
+rules:
+- apiGroups:
+  - riak.openriak.io
+  resources:
+  - riakusers
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - riak.openriak.io
+  resources:
+  - riakusers/status
+  verbs:
+  - get
