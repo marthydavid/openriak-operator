@@ -1,20 +1,20 @@
 # Riak KV 3.2 container image
 # RPM source: https://files.tiot.jp/riak/kv/3.2/
-# Base: Red Hat Universal Base Image 9
+# Base: Red Hat Universal Base Image 8
 
-FROM registry.access.redhat.com/ubi9/ubi AS base
+FROM registry.access.redhat.com/ubi8/ubi AS base
 
 ARG RIAK_VERSION=3.2.6
 ARG RIAK_OTP=OTP24
 ARG RIAK_ARCH=x86_64
-ARG RIAK_RPM_URL=https://files.tiot.jp/riak/kv/3.2/${RIAK_VERSION}/rhel/9/riak-${RIAK_VERSION}.${RIAK_OTP}-1.el9.${RIAK_ARCH}.rpm
+ARG RIAK_RPM_URL=https://files.tiot.jp/riak/kv/3.2/${RIAK_VERSION}/rhel/8/riak-${RIAK_VERSION}.${RIAK_OTP}-1.el8.${RIAK_ARCH}.rpm
 
 # Enable EPEL to satisfy the /usr/bin/escript dependency declared by the
 # Riak RPM spec (provided by erlang-erts).  Riak bundles its own OTP24
 # runtime; erlang-erts is only needed to satisfy the RPM dependency check.
 # procps-ng: provides `ps`, used by riak startup scripts.
 RUN dnf install -y \
-        https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm \
+        https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm \
     && dnf install -y \
         procps-ng \
         erlang-erts \
