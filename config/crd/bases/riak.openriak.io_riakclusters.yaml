@@ -40,7 +40,7 @@ spec:
             description: RiakClusterSpec defines the desired state of RiakCluster.
             properties:
               image:
-                description: Image is the Riak Docker image to use (e.g., riak/riak:latest)
+                description: Image is the Riak Docker image to use (e.g., ghcr.io/marthydavid/riak:3.2.6)
                 minLength: 1
                 type: string
               imagePullPolicy:
