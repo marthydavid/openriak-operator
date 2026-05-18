@@ -124,6 +124,22 @@ PRs build but do **not** push (no registry credentials needed).
 
 The controller's fallback image (when `spec.image` is omitted) is `ghcr.io/marthydavid/riak:3.2.6`.
 
+## Security Notes
+
+### Known False Positive Patterns (do not re-flag these)
+
+| Pattern | Why it's safe |
+|---------|--------------|
+| Command injection via kubectl exec | `executor.go` uses `exec.CommandContext` with argument array — no shell is invoked; metacharacters are literal |
+| `RIAK_CONFIG_*` env var injection | Requires Kubernetes RBAC write access to RiakCluster; env vars are a trusted boundary |
+| Config key-value logging in `SetConfig` | Only logs Riak node config params; user passwords go through `CreateUser()` and are never passed to `SetConfig` |
+
+### Open Vulnerability
+
+**Hardcoded default password** (`internal/controller/riakuser_controller.go:139`):  
+`passwordSecret` is optional; when omitted, the operator sets the Riak user password to `"changeme"`.  
+Fix: add `+kubebuilder:validation:Required` to `PasswordSecret` in `api/v1/riakuser_types.go`, or auto-generate a random secret.
+
 ## Finalizer Pattern
 
 Every controller follows this order in Reconcile:
