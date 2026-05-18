@@ -34,11 +34,9 @@ func mockRunner(responses map[string]string, errs map[string]error) (func(contex
 				return out, nil
 			}
 		}
-		if errs != nil {
-			for key, e := range errs {
-				if strings.Contains(joined, key) {
-					return "", e
-				}
+		for key, e := range errs {
+			if strings.Contains(joined, key) {
+				return "", e
 			}
 		}
 		return "", nil

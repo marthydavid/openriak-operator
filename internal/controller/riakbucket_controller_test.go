@@ -32,7 +32,7 @@ import (
 	"github.com/marthydavid/openriak-operator/internal/riak"
 )
 
-func reconcileBucket(ctx context.Context, name, namespace string) error {
+func reconcileBucket(ctx context.Context, name, namespace string) error { //nolint:unparam
 	r := &RiakBucketReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 	_, err := r.Reconcile(ctx, reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: name, Namespace: namespace},

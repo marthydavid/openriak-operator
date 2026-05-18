@@ -88,7 +88,9 @@ func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.reconcileStatefulSet(ctx, cluster); err != nil {
 		log.Error(err, "failed to reconcile StatefulSet")
 		cluster.Status.Phase = riakv1.PhaseFailed
-		r.Status().Update(ctx, cluster)
+		if updateErr := r.Status().Update(ctx, cluster); updateErr != nil {
+			log.Error(updateErr, "failed to update cluster status")
+		}
 		return ctrl.Result{}, err
 	}
 

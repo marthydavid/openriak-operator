@@ -92,7 +92,9 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		log.Error(err, "failed to get cluster", "cluster", bucket.Spec.ClusterName)
 		bucket.Status.Phase = riakv1.BucketPhaseFailed
 		bucket.Status.Error = fmt.Sprintf("cluster not found: %v", err)
-		r.Status().Update(ctx, bucket)
+		if updateErr := r.Status().Update(ctx, bucket); updateErr != nil {
+			log.Error(updateErr, "failed to update bucket status")
+		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
@@ -119,7 +121,9 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		bucket.Status.Phase = riakv1.BucketPhaseFailed
 		bucket.Status.Error = fmt.Sprintf("failed to create bucket: %v", err)
 		bucket.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
-		r.Status().Update(ctx, bucket)
+		if updateErr := r.Status().Update(ctx, bucket); updateErr != nil {
+			log.Error(updateErr, "failed to update bucket status")
+		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 

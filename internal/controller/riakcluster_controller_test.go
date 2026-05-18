@@ -34,7 +34,7 @@ import (
 )
 
 // reconcileCluster is a helper that creates the reconciler and calls Reconcile.
-func reconcileCluster(ctx context.Context, name, namespace string) (*RiakClusterReconciler, error) {
+func reconcileCluster(ctx context.Context, name, namespace string) (*RiakClusterReconciler, error) { //nolint:unparam
 	r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 	_, err := r.Reconcile(ctx, reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: name, Namespace: namespace},
