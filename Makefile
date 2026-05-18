@@ -1,5 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
+# Riak KV image
+RIAK_IMG ?= ghcr.io/marthydavid/riak:3.2.6
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.31.0
 
@@ -125,6 +127,14 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm agents-riak-operator-kubernetes-lifecycle-builder
 	rm Dockerfile.cross
+
+.PHONY: docker-build-riak
+docker-build-riak: ## Build the Riak KV docker image.
+	$(CONTAINER_TOOL) build -t ${RIAK_IMG} images/riak/
+
+.PHONY: docker-push-riak
+docker-push-riak: ## Push the Riak KV docker image.
+	$(CONTAINER_TOOL) push ${RIAK_IMG}
 
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
