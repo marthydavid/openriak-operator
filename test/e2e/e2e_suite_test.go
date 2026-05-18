@@ -41,10 +41,19 @@ var (
 	// isCertManagerAlreadyInstalled will be set true when CertManager CRDs be found on the cluster
 	isCertManagerAlreadyInstalled = false
 
-	// projectImage is the name of the image which will be build and loaded
-	// with the code source changes to be tested.
-	projectImage = "example.com/agents-riak-operator-kubernetes-lifecycle:v0.0.1"
+	// projectImage is the operator image under test. In CI the IMG env var is set
+	// to the SHA-tagged image that was built and loaded into Kind by the build job.
+	// Locally, fall back to a sensible default so developers can run make test-e2e
+	// after a manual docker build.
+	projectImage = imageFromEnv()
 )
+
+func imageFromEnv() string {
+	if img := os.Getenv("IMG"); img != "" {
+		return img
+	}
+	return "ghcr.io/marthydavid/openriak-operator:latest"
+}
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
 // temporary environment to validate project changes with the the purposed to be used in CI jobs.
@@ -70,16 +79,19 @@ var _ = BeforeSuite(func() {
 	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to run make manifests")
 
-	By("building the manager(Operator) image")
-	cmd = exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
-	_, err = utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
+	// When IMG is set the image was already built and loaded into Kind by the CI
+	// build job. Skip the local build+load so the suite tests the exact artifact
+	// that will be shipped rather than a second rebuild.
+	if os.Getenv("IMG") == "" {
+		By("building the manager(Operator) image")
+		cmd = exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
+		_, err = utils.Run(cmd)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
 
-	// TODO(user): If you want to change the e2e test vendor from Kind, ensure the image is
-	// built and available before running the tests. Also, remove the following block.
-	By("loading the manager(Operator) image on Kind")
-	err = utils.LoadImageToKindClusterWithName(projectImage)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into Kind")
+		By("loading the manager(Operator) image on Kind")
+		err = utils.LoadImageToKindClusterWithName(projectImage)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into Kind")
+	}
 
 	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
 	// To prevent errors when tests run in environments with Prometheus or CertManager already installed,
