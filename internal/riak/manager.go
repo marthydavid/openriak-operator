@@ -13,17 +13,17 @@ import (
 
 // Manager handles Riak cluster management operations.
 type Manager struct {
-	executor *Executor
+	executor  *Executor
 	k8sClient client.Client
-	log      logr.Logger
+	log       logr.Logger
 }
 
 // NewManager creates a new Riak cluster manager.
 func NewManager(executor *Executor, k8sClient client.Client, log logr.Logger) *Manager {
 	return &Manager{
-		executor: executor,
+		executor:  executor,
 		k8sClient: k8sClient,
-		log:      log,
+		log:       log,
 	}
 }
 
@@ -34,7 +34,7 @@ func (m *Manager) GetClusterStatus(ctx context.Context, cluster *riakv1.RiakClus
 	}
 
 	pod := cluster.Status.Members[0].Pod
-	return m.executor.GetStatus(ctx, cluster.Namespace, pod, "riak", "riak-admin", "status")
+	return m.executor.GetStatus(ctx, cluster.Namespace, pod, "riak")
 }
 
 // InitializeCluster prepares a Riak cluster for bootstrap.

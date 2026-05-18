@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/marthydavid/openriak-operator/internal/riak"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -233,7 +232,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 							},
 						},
 					},
-					TerminationGracePeriodSeconds: ptr(60),
+					TerminationGracePeriodSeconds: ptr(int64(60)),
 					Affinity: &corev1.Affinity{
 						PodAntiAffinity: &corev1.PodAntiAffinity{
 							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
