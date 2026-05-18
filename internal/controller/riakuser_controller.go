@@ -157,7 +157,9 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		user.Status.Phase = riakv1.UserPhaseFailed
 		user.Status.Error = fmt.Sprintf("failed to create user: %v", err)
 		user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
-		r.Status().Update(ctx, user)
+		if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+			log.Error(updateErr, "failed to update user status")
+		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
