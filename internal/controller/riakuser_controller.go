@@ -94,7 +94,9 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		log.Error(err, "failed to get cluster", "cluster", user.Spec.ClusterName)
 		user.Status.Phase = riakv1.UserPhaseFailed
 		user.Status.Error = fmt.Sprintf("cluster not found: %v", err)
-		r.Status().Update(ctx, user)
+		if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+			log.Error(updateErr, "failed to update user status")
+		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
@@ -116,7 +118,9 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			log.Error(err, "failed to get password secret")
 			user.Status.Phase = riakv1.UserPhaseFailed
 			user.Status.Error = fmt.Sprintf("password secret not found: %v", err)
-			r.Status().Update(ctx, user)
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
+			}
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
@@ -130,7 +134,9 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			log.Error(err, "failed to extract password")
 			user.Status.Phase = riakv1.UserPhaseFailed
 			user.Status.Error = err.Error()
-			r.Status().Update(ctx, user)
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
+			}
 			return ctrl.Result{}, nil
 		} else {
 			password = string(pwd)
