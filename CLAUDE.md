@@ -90,6 +90,24 @@ riak-admin bucket-type create mytype '{"props":{"n_val":3}}'
 The executor's `CreateBucket` method handles this serialisation. String values that parse as a
 JSON literal (number, bool) are sent as their native type.
 
+## Container Images
+
+All images are published to **GitHub Container Registry** under `ghcr.io/marthydavid/`:
+
+| Image | Registry path |
+|-------|--------------|
+| Operator | `ghcr.io/marthydavid/openriak-operator:<tag>` |
+| Riak KV 3.2 | `ghcr.io/marthydavid/riak:3.2.6` |
+
+The Riak image is built from `images/riak/Dockerfile` (UBI9 base, RPM from files.tiot.jp):
+
+```bash
+docker build -t ghcr.io/marthydavid/riak:3.2.6 images/riak/
+docker push ghcr.io/marthydavid/riak:3.2.6
+```
+
+The controller's fallback image (when `spec.image` is omitted) is `ghcr.io/marthydavid/riak:3.2.6`.
+
 ## Finalizer Pattern
 
 Every controller follows this order in Reconcile:

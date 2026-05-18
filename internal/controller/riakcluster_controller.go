@@ -111,7 +111,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 
 	image := cluster.Spec.Image
 	if image == "" {
-		image = "openriak/riak:3.2.6"
+		image = "ghcr.io/marthydavid/riak:3.2.6"
 	}
 
 	pullPolicy := cluster.Spec.ImagePullPolicy

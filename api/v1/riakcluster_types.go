@@ -29,7 +29,7 @@ type RiakClusterSpec struct {
 	// +kubebuilder:validation:Maximum=999
 	Size int32 `json:"size"`
 
-	// Image is the Riak Docker image to use (e.g., openriak/riak:3.2.6)
+	// Image is the Riak Docker image to use (e.g., ghcr.io/marthydavid/riak:3.2.6)
 	// +kubebuilder:validation:MinLength=1
 	Image string `json:"image,omitempty"`
 
