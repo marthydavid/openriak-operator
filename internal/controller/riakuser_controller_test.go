@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
@@ -27,6 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
@@ -467,6 +470,139 @@ var _ = Describe("RiakUser Controller", func() {
 			} else {
 				Expect(errors.IsNotFound(err)).To(BeTrue())
 			}
+		})
+	})
+
+	Context("Status().Update() fails in error paths", func() {
+		// interceptor.NewClient requires client.WithWatch; create one from the test cfg.
+		newFailStatusClient := func() client.Client {
+			wc, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+			Expect(err).NotTo(HaveOccurred())
+			return interceptor.NewClient(wc, interceptor.Funcs{
+				SubResourceUpdate: func(_ context.Context, _ client.Client, _ string, _ client.Object, _ ...client.SubResourceUpdateOption) error {
+					return fmt.Errorf("status update injected failure")
+				},
+			})
+		}
+		reconcileWith := func(c client.Client, name string) error {
+			r := &RiakUserReconciler{Client: c, Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: name, Namespace: ns},
+			})
+			return err
+		}
+		makeReadyCluster := func(clusterName string) *riakv1.RiakCluster {
+			c := &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "ghcr.io/marthydavid/riak:3.2.6"},
+			}
+			Expect(k8sClient.Create(ctx, c)).To(Succeed())
+			c.Status.Phase = riakv1.PhaseReady
+			c.Status.Members = []riakv1.RiakNodeMember{{Pod: clusterName + "-0", Name: clusterName + "-0"}}
+			Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+			return c
+		}
+
+		// Pre-initialize status via k8sClient so the controller's first
+		// Status().Update() (phase → Creating) is skipped, letting us reach
+		// the specific error path that calls Status().Update() with the
+		// intercepted (failing) client.
+		initStatus := func(u *riakv1.RiakUser) {
+			u.Status.Phase = riakv1.UserPhaseCreating
+			Expect(k8sClient.Status().Update(ctx, u)).To(Succeed())
+		}
+
+		It("logs update error when cluster not found", func() {
+			userName := "user-sfail-no-cluster"
+			u := &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
+				Spec:       riakv1.RiakUserSpec{ClusterName: "missing-cluster", Username: "alice"},
+			}
+			Expect(k8sClient.Create(ctx, u)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, u) })
+			initStatus(u)
+			Expect(reconcileWith(newFailStatusClient(), userName)).To(Succeed())
+		})
+
+		It("logs update error when password secret not found", func() {
+			clusterName := "user-sfail-no-secret-c"
+			userName := "user-sfail-no-secret"
+			c := makeReadyCluster(clusterName)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+
+			u := &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: clusterName,
+					Username:    "bob",
+					PasswordSecret: &riakv1.PasswordSecretRef{
+						Name: "missing-secret",
+						Key:  "password",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, u)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, u) })
+			initStatus(u)
+			Expect(reconcileWith(newFailStatusClient(), userName)).To(Succeed())
+		})
+
+		It("logs update error when password key not found in secret", func() {
+			clusterName := "user-sfail-bad-key-c"
+			userName := "user-sfail-bad-key"
+			c := makeReadyCluster(clusterName)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "sfail-bad-key-secret", Namespace: ns},
+				Data:       map[string][]byte{"otherkey": []byte("value")},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, secret) })
+
+			u := &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: clusterName,
+					Username:    "carol",
+					PasswordSecret: &riakv1.PasswordSecretRef{
+						Name: "sfail-bad-key-secret",
+						Key:  "password",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, u)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, u) })
+			initStatus(u)
+			Expect(reconcileWith(newFailStatusClient(), userName)).To(Succeed())
+		})
+
+		It("logs update error when CreateUser fails", func() {
+			clusterName := "user-sfail-create-c"
+			userName := "user-sfail-create"
+			c := makeReadyCluster(clusterName)
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+
+			u := &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
+				Spec:       riakv1.RiakUserSpec{ClusterName: clusterName, Username: "dave"},
+			}
+			Expect(k8sClient.Create(ctx, u)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, u) })
+			initStatus(u)
+
+			failRunner := func(_ context.Context, _ string, _ ...string) (string, error) {
+				return "", fmt.Errorf("riak-admin exec failed")
+			}
+			r := &RiakUserReconciler{
+				Client:   newFailStatusClient(),
+				Scheme:   k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), failRunner),
+			}
+			_, err := r.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: userName, Namespace: ns},
+			})
+			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 
