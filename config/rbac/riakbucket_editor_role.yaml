@@ -1,0 +1,27 @@
+# permissions for end users to edit riakbuckets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: agents-riak-operator-kubernetes-lifecycle
+    app.kubernetes.io/managed-by: kustomize
+  name: riakbucket-editor-role
+rules:
+- apiGroups:
+  - riak.openriak.io
+  resources:
+  - riakbuckets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - riak.openriak.io
+  resources:
+  - riakbuckets/status
+  verbs:
+  - get

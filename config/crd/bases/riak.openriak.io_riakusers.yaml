@@ -1,0 +1,118 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: riakusers.riak.openriak.io
+spec:
+  group: riak.openriak.io
+  names:
+    kind: RiakUser
+    listKind: RiakUserList
+    plural: riakusers
+    singular: riakuser
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: RiakUser is the Schema for the riakusers API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: RiakUserSpec defines the desired state of RiakUser.
+            properties:
+              clusterName:
+                description: ClusterName is the name of the RiakCluster this user
+                  belongs to.
+                minLength: 1
+                type: string
+              grants:
+                description: Grants are the permissions to grant to this user.
+                items:
+                  description: Grant represents a permission grant for a user.
+                  properties:
+                    bucketName:
+                      description: BucketName is the bucket name (if resource is "bucket").
+                      type: string
+                    permission:
+                      description: Permission is the permission type.
+                      enum:
+                      - read
+                      - write
+                      - delete
+                      - list
+                      - admin
+                      type: string
+                    resource:
+                      description: Resource is what is being granted (bucket, any).
+                      enum:
+                      - bucket
+                      - any
+                      type: string
+                  required:
+                  - permission
+                  - resource
+                  type: object
+                type: array
+              passwordSecret:
+                description: |-
+                  Password is the user password (stored in a Secret).
+                  PasswordSecret references a Secret containing the password.
+                properties:
+                  key:
+                    description: Key is the key in the Secret containing the password.
+                    type: string
+                  name:
+                    description: Name is the Secret name.
+                    type: string
+                required:
+                - name
+                type: object
+              username:
+                description: Username is the username.
+                minLength: 1
+                type: string
+            required:
+            - clusterName
+            - username
+            type: object
+          status:
+            description: RiakUserStatus defines the observed state of RiakUser.
+            properties:
+              created:
+                description: Created indicates if the user was successfully created.
+                type: boolean
+              error:
+                description: Error contains error details if creation failed.
+                type: string
+              lastUpdateTime:
+                description: LastUpdateTime is when the user was last updated.
+                format: date-time
+                type: string
+              phase:
+                description: Phase is the current phase (Creating, Ready, Failed).
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,9 @@
+apiVersion: riak.openriak.io/v1
+kind: RiakUser
+metadata:
+  labels:
+    app.kubernetes.io/name: agents-riak-operator-kubernetes-lifecycle
+    app.kubernetes.io/managed-by: kustomize
+  name: riakuser-sample
+spec:
+  # TODO(user): Add fields here

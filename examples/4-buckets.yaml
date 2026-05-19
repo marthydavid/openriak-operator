@@ -1,0 +1,30 @@
+apiVersion: riak.openriak.io/v1
+kind: RiakBucket
+metadata:
+  name: app-data-bucket
+  namespace: default
+spec:
+  clusterName: riak-cluster-dev
+  bucketName: app-data
+  bucketType: default
+  replicationFactor: 3
+  nVal: 3
+  allowMulti: false
+  properties:
+    "search_index": "_dont_index_"
+    "consistent": "false"
+---
+apiVersion: riak.openriak.io/v1
+kind: RiakBucket
+metadata:
+  name: session-bucket
+  namespace: default
+spec:
+  clusterName: riak-cluster-dev
+  bucketName: sessions
+  bucketType: default
+  replicationFactor: 3
+  nVal: 3
+  allowMulti: false
+  properties:
+    "backend": "leveldb"

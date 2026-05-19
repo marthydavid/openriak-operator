@@ -1,0 +1,30 @@
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: riak-cluster-prod
+  namespace: riak-system
+spec:
+  size: 5
+  image: ghcr.io/marthydavid/riak:3.2.6
+  imagePullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 2
+      memory: 4Gi
+    limits:
+      cpu: 4
+      memory: 8Gi
+  
+  storageClassName: fast-ssd
+  storageSize: 100Gi
+  servicePort: 8087
+  
+  riakConfig:
+    "ring_size": "256"
+    "transfer_limit": "4"
+    "handoff_port": "8099"
+    "anti_entropy": "on"
+  
+  nodeSelector:
+    node-role: riak

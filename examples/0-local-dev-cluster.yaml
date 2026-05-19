@@ -1,0 +1,37 @@
+# Minimal single-node RiakCluster for local development (Kind on any platform).
+#
+# Differences from the 3-node dev example:
+#   - size: 1  → no anti-affinity problem on a single-node Kind cluster
+#   - halved CPU/memory requests → fits a laptop
+#   - ring_size: 8  → small ring is fine for local testing (must be power of 2)
+#
+# Apple Silicon note: Riak 3.2 is x86_64-only. Docker Desktop on M-series Macs
+# runs x86_64 containers via Rosetta 2 automatically — no extra configuration is
+# needed in the YAML, but first startup may take 2–3 minutes under emulation.
+# Use hack/quickstart-apple-silicon.sh to set up the full local environment.
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: riak-local
+  namespace: default
+spec:
+  size: 1
+  image: ghcr.io/marthydavid/riak:3.2.6
+  imagePullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+  # "standard" is the default StorageClass provisioned by Kind.
+  storageClassName: standard
+  storageSize: 2Gi
+  servicePort: 8087
+
+  riakConfig:
+    "ring_size": "8"
+    "transfer_limit": "2"
