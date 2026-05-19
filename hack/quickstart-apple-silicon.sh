@@ -5,11 +5,17 @@
 # -----------------
 # The operator binary builds natively for linux/arm64 (Go cross-compiles fine).
 # The Riak 3.2 image is x86_64-only (no ARM RPM available from files.tiot.jp).
-# Docker Desktop on Apple Silicon runs x86_64 containers via Rosetta 2, so
-# Riak pods work — but run under emulation and start more slowly than on Intel.
+# Riak pods run under x86_64 emulation — first startup is slower than on Intel.
 #
-# Prerequisite: in Docker Desktop → Settings → General, enable
-#   "Use Rosetta for x86_64/amd64 emulation on Apple Silicon".
+# Supported container runtimes
+# ----------------------------
+# Docker Desktop  — enable "Use Rosetta for x86_64/amd64 emulation on Apple Silicon"
+#                   in Settings → General for best emulation performance.
+# Rancher Desktop — select the "dockerd (moby)" container engine in Preferences →
+#                   Container Engine. x86_64 emulation runs via QEMU (slightly
+#                   slower than Rosetta but fully functional).
+#
+# Both expose a `docker` CLI that `kind` can use without extra configuration.
 #
 # Required tools: docker, kind, kubectl, go (≥1.22), make
 
@@ -36,14 +42,24 @@ require() {
 require docker kind kubectl go make
 
 ARCH=$(uname -m)
-[[ "$ARCH" == "arm64" ]] || { echo "Warning: this script is designed for Apple Silicon (arm64), got: $ARCH"; }
+[[ "$ARCH" == "arm64" ]] || echo "Warning: this script targets Apple Silicon (arm64), got: $ARCH"
 
-# Confirm Docker Desktop Rosetta emulation is reachable by pulling a tiny amd64 image.
-info "Verifying x86_64 emulation (Rosetta 2) via Docker Desktop..."
+# Verify x86_64 emulation works before spending time on a Kind cluster.
+# Docker Desktop uses Rosetta 2; Rancher Desktop uses QEMU — both satisfy this check.
+info "Verifying x86_64 emulation..."
 if ! docker run --rm --platform linux/amd64 --entrypoint /bin/true alpine:3.20 2>/dev/null; then
-    die "x86_64 emulation failed. Enable 'Use Rosetta for x86_64/amd64 emulation on Apple Silicon' in Docker Desktop → Settings → General, then re-run."
+    cat >&2 <<'HINT'
+error: x86_64 emulation is not working. Fix for your runtime:
+
+  Docker Desktop  → Settings → General →
+    enable "Use Rosetta for x86_64/amd64 emulation on Apple Silicon"
+
+  Rancher Desktop → Preferences → Container Engine →
+    select "dockerd (moby)" (containerd does not support --platform for kind)
+HINT
+    exit 1
 fi
-ok "Rosetta emulation working"
+ok "x86_64 emulation working"
 
 # ── Kind cluster ─────────────────────────────────────────────────────────────
 
@@ -55,7 +71,6 @@ else
     ok "Cluster created"
 fi
 
-# Point kubectl at the new cluster.
 kubectl cluster-info --context "kind-${CLUSTER_NAME}" >/dev/null
 
 # ── Build operator image (linux/arm64, native speed) ─────────────────────────
@@ -88,8 +103,6 @@ kubectl rollout status deployment \
 ok "Operator is running"
 
 # ── Deploy a minimal single-node Riak cluster ─────────────────────────────────
-# Using the local-dev example (1 node, modest resources, no anti-affinity)
-# so it fits on a laptop without needing 3 schedulable nodes.
 
 info "Applying single-node Riak cluster example..."
 kubectl apply -f examples/0-local-dev-cluster.yaml
@@ -97,7 +110,7 @@ ok "RiakCluster created"
 
 cat <<'EOF'
 
-  Riak pods run as x86_64 under Rosetta 2 — first startup may take 2–3 minutes.
+  Riak runs as x86_64 under emulation — first startup may take 2–3 minutes.
 
   Watch progress:
     kubectl get riakcluster riak-local -w
