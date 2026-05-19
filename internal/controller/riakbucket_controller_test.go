@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
@@ -26,6 +27,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
@@ -300,6 +303,87 @@ var _ = Describe("RiakBucket Controller", func() {
 			} else {
 				Expect(errors.IsNotFound(err)).To(BeTrue())
 			}
+		})
+	})
+
+	Context("Status().Update() fails in error paths", func() {
+		newFailStatusClient := func() client.Client {
+			wc, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+			Expect(err).NotTo(HaveOccurred())
+			return interceptor.NewClient(wc, interceptor.Funcs{
+				SubResourceUpdate: func(_ context.Context, _ client.Client, _ string, _ client.Object, _ ...client.SubResourceUpdateOption) error {
+					return fmt.Errorf("status update injected failure")
+				},
+			})
+		}
+
+		// Pre-initialize status via k8sClient so the controller's first
+		// Status().Update() (phase → Creating) is skipped, letting us reach
+		// the specific error path that calls Status().Update() with the
+		// intercepted (failing) client.
+		initBucketStatus := func(b *riakv1.RiakBucket) {
+			b.Status.Phase = riakv1.BucketPhaseCreating
+			Expect(k8sClient.Status().Update(ctx, b)).To(Succeed())
+		}
+
+		It("logs update error when cluster not found", func() {
+			bucketName := "bucket-sfail-no-cluster"
+			b := &riakv1.RiakBucket{
+				ObjectMeta: metav1.ObjectMeta{Name: bucketName, Namespace: ns},
+				Spec: riakv1.RiakBucketSpec{
+					ClusterName: "missing-cluster",
+					BucketName:  "test",
+					BucketType:  "default",
+				},
+			}
+			Expect(k8sClient.Create(ctx, b)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, b) })
+			initBucketStatus(b)
+
+			r := &RiakBucketReconciler{Client: newFailStatusClient(), Scheme: k8sClient.Scheme()}
+			_, err := r.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: bucketName, Namespace: ns},
+			})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("logs update error when CreateBucketType fails", func() {
+			clusterName := "bucket-sfail-create-c"
+			bucketName := "bucket-sfail-create"
+			c := &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "ghcr.io/marthydavid/riak:3.2.6"},
+			}
+			Expect(k8sClient.Create(ctx, c)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
+			c.Status.Phase = riakv1.PhaseReady
+			c.Status.Members = []riakv1.RiakNodeMember{{Pod: clusterName + "-0", Name: clusterName + "-0"}}
+			Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+
+			b := &riakv1.RiakBucket{
+				ObjectMeta: metav1.ObjectMeta{Name: bucketName, Namespace: ns},
+				Spec: riakv1.RiakBucketSpec{
+					ClusterName: clusterName,
+					BucketName:  "test",
+					BucketType:  "default",
+				},
+			}
+			Expect(k8sClient.Create(ctx, b)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, b) })
+			initBucketStatus(b)
+
+			failRunner := func(_ context.Context, _ string, _ ...string) (string, error) {
+				return "", fmt.Errorf("riak-admin exec failed")
+			}
+			r := &RiakBucketReconciler{
+				Client:   newFailStatusClient(),
+				Scheme:   k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), failRunner),
+			}
+			_, err := r.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: bucketName, Namespace: ns},
+			})
+			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 
