@@ -5,10 +5,10 @@
 #   - halved CPU/memory requests → fits a laptop
 #   - ring_size: 8  → small ring is fine for local testing (must be power of 2)
 #
-# Apple Silicon note: Riak 3.2 is x86_64-only. Docker Desktop on M-series Macs
-# runs x86_64 containers via Rosetta 2 automatically — no extra configuration is
-# needed in the YAML, but first startup may take 2–3 minutes under emulation.
-# Use hack/quickstart-apple-silicon.sh to set up the full local environment.
+# Apple Silicon note: Riak 3.2 is x86_64-only. The quickstart script
+# (hack/quickstart-apple-silicon.sh) creates an amd64 Kind cluster via Rosetta 2
+# so the image platform matches the cluster nodes. Use that script rather than
+# applying this file directly on Apple Silicon.
 apiVersion: riak.openriak.io/v1
 kind: RiakCluster
 metadata:
