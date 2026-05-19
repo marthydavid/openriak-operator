@@ -236,15 +236,233 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
+	})
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+	// ── Riak CR lifecycle ─────────────────────────────────────────────────────────
+	// Create a RiakCluster, a RiakBucket, and a RiakUser, verify the operator
+	// reconciles all three (finalizers, child resources, status phases), then
+	// delete them and confirm they are fully removed.
+	Context("Riak CR lifecycle", Ordered, func() {
+		const (
+			riakNS      = "default"
+			clusterName = "e2e-cluster"
+			bucketName  = "e2e-bucket"
+			userName    = "e2e-user"
+			secretName  = "e2e-user-secret"
+		)
+
+		// applyManifest writes YAML to a temp file and runs kubectl apply.
+		applyManifest := func(yaml string) {
+			f, err := os.CreateTemp("", "e2e-riak-*.yaml")
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			_, err = fmt.Fprint(f, yaml)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			ExpectWithOffset(1, f.Close()).To(Succeed())
+			defer os.Remove(f.Name())
+			cmd := exec.Command("kubectl", "apply", "-f", f.Name())
+			_, err = utils.Run(cmd)
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		}
+
+		BeforeAll(func() {
+			By("creating a single-node RiakCluster")
+			applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  image: ghcr.io/marthydavid/riak:3.2.6
+  storageClassName: standard
+  storageSize: 1Gi
+`, clusterName, riakNS))
+
+			By("creating the password Secret for the RiakUser")
+			applyManifest(fmt.Sprintf(`
+apiVersion: v1
+kind: Secret
+metadata:
+  name: %s
+  namespace: %s
+type: Opaque
+stringData:
+  password: e2etestpassword
+`, secretName, riakNS))
+
+			By("creating a RiakBucket")
+			applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakBucket
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  clusterName: %s
+  bucketName: e2e-app-data
+  bucketType: default
+`, bucketName, riakNS, clusterName))
+
+			By("creating a RiakUser with read/write grants")
+			applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakUser
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  clusterName: %s
+  username: e2euser
+  passwordSecret:
+    name: %s
+    key: password
+  grants:
+    - resource: any
+      permission: read
+    - resource: any
+      permission: write
+`, userName, riakNS, clusterName, secretName))
+		})
+
+		AfterAll(func() {
+			By("removing e2e Riak test resources (best-effort)")
+			for _, args := range [][]string{
+				{"kubectl", "delete", "riakuser", userName, "-n", riakNS, "--ignore-not-found"},
+				{"kubectl", "delete", "riakbucket", bucketName, "-n", riakNS, "--ignore-not-found"},
+				{"kubectl", "delete", "riakcluster", clusterName, "-n", riakNS, "--ignore-not-found"},
+				{"kubectl", "delete", "secret", secretName, "-n", riakNS, "--ignore-not-found"},
+			} {
+				cmd := exec.Command(args[0], args[1:]...)
+				_, _ = utils.Run(cmd)
+			}
+		})
+
+		It("operator sets a finalizer and creates infrastructure for the RiakCluster", func() {
+			By("verifying the operator sets a finalizer on the RiakCluster")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
+					"-n", riakNS, "-o", "jsonpath={.metadata.finalizers[0]}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(ContainSubstring("riak.openriak.io"))
+			}).Should(Succeed())
+
+			By("verifying the operator creates the StatefulSet")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", clusterName, "-n", riakNS)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}).Should(Succeed())
+
+			By("verifying the operator creates the headless Service")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "service", clusterName+"-headless", "-n", riakNS)
+				_, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+			}).Should(Succeed())
+
+			By("verifying the RiakCluster status.phase is set")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
+					"-n", riakNS, "-o", "jsonpath={.status.phase}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).NotTo(BeEmpty())
+			}).Should(Succeed())
+		})
+
+		It("operator sets a finalizer and a status phase for the RiakBucket", func() {
+			By("verifying the operator sets a finalizer on the RiakBucket")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakbucket", bucketName,
+					"-n", riakNS, "-o", "jsonpath={.metadata.finalizers[0]}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(ContainSubstring("riak.openriak.io"))
+			}).Should(Succeed())
+
+			By("verifying the RiakBucket status.phase is set")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakbucket", bucketName,
+					"-n", riakNS, "-o", "jsonpath={.status.phase}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).NotTo(BeEmpty())
+			}).Should(Succeed())
+		})
+
+		It("operator sets a finalizer and a status phase for the RiakUser", func() {
+			By("verifying the operator sets a finalizer on the RiakUser")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakuser", userName,
+					"-n", riakNS, "-o", "jsonpath={.metadata.finalizers[0]}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(ContainSubstring("riak.openriak.io"))
+			}).Should(Succeed())
+
+			By("verifying the RiakUser status.phase is set")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakuser", userName,
+					"-n", riakNS, "-o", "jsonpath={.status.phase}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).NotTo(BeEmpty())
+			}).Should(Succeed())
+		})
+
+		It("all three CR types appear in kubectl get", func() {
+			By("listing RiakClusters")
+			cmd := exec.Command("kubectl", "get", "riakclusters", "-n", riakNS)
+			out, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(ContainSubstring(clusterName))
+
+			By("listing RiakBuckets")
+			cmd = exec.Command("kubectl", "get", "riakbuckets", "-n", riakNS)
+			out, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(ContainSubstring(bucketName))
+
+			By("listing RiakUsers")
+			cmd = exec.Command("kubectl", "get", "riakusers", "-n", riakNS)
+			out, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(ContainSubstring(userName))
+		})
+
+		It("all CRs are removed cleanly on deletion", func() {
+			By("deleting the RiakUser and waiting for it to disappear")
+			cmd := exec.Command("kubectl", "delete", "riakuser", userName, "-n", riakNS)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakuser", userName, "-n", riakNS)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred())
+			}).Should(Succeed())
+
+			By("deleting the RiakBucket and waiting for it to disappear")
+			cmd = exec.Command("kubectl", "delete", "riakbucket", bucketName, "-n", riakNS)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakbucket", bucketName, "-n", riakNS)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred())
+			}).Should(Succeed())
+
+			By("deleting the RiakCluster and waiting for it to disappear")
+			cmd = exec.Command("kubectl", "delete", "riakcluster", clusterName, "-n", riakNS)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakcluster", clusterName, "-n", riakNS)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred())
+			}).Should(Succeed())
+		})
 	})
 })
 
