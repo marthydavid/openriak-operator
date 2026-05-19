@@ -24,7 +24,7 @@ WORKDIR /
 
 COPY --from=builder /workspace/manager .
 
-RUN addgroup -S operator && adduser -S operator -G operator
-USER operator
+RUN addgroup -S -g 65532 operator && adduser -S -u 65532 -G operator operator
+USER 65532:65532
 
 ENTRYPOINT ["/manager"]
