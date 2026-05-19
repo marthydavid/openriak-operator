@@ -5,7 +5,7 @@ metadata:
     control-plane: controller-manager
     app.kubernetes.io/name: agents-riak-operator-kubernetes-lifecycle
     app.kubernetes.io/managed-by: kustomize
-  name: controller-manager-metrics-service
+  name: metrics
   namespace: system
 spec:
   ports:

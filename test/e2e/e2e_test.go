@@ -37,7 +37,7 @@ const namespace = "agents-riak-operator-kubernetes-lifecycle-system"
 const serviceAccountName = "agents-riak-operator-kubernetes-lifecycle-controller-manager"
 
 // metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "agents-riak-operator-kubernetes-lifecycle-controller-manager-metrics-service"
+const metricsServiceName = "agents-riak-operator-kubernetes-lifecycle-metrics"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "agents-riak-operator-kubernetes-lifecycle-metrics-binding"
