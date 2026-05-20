@@ -258,7 +258,7 @@ var _ = Describe("Manager", Ordered, func() {
 			_, err = fmt.Fprint(f, yaml)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
 			ExpectWithOffset(1, f.Close()).To(Succeed())
-			defer os.Remove(f.Name())
+			defer func() { _ = os.Remove(f.Name()) }()
 			cmd := exec.Command("kubectl", "apply", "-f", f.Name())
 			_, err = utils.Run(cmd)
 			ExpectWithOffset(1, err).NotTo(HaveOccurred())
