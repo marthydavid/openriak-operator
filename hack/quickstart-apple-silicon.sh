@@ -3,19 +3,21 @@
 #
 # Architecture note
 # -----------------
-# The operator binary builds natively for linux/arm64 (Go cross-compiles fine).
-# The Riak 3.2 image is x86_64-only (no ARM RPM available from files.tiot.jp).
-# Riak pods run under x86_64 emulation — first startup is slower than on Intel.
+# The Riak 3.2 RPM is x86_64-only (no arm64 package available from files.tiot.jp).
+# Rather than trying to pull an amd64 image into an arm64 Kind cluster — which
+# containerd rejects as a platform mismatch — this script creates an amd64 Kind
+# cluster that runs via Rosetta 2 emulation.  Everything in the cluster then
+# runs as linux/amd64, which is the only architecture Riak supports.
+#
+# Trade-off: the operator binary is also built for amd64 (cross-compiled on the
+# host), so container start-up is slightly slower than a native arm64 setup.
+# Runtime performance of the operator itself is unaffected once running.
 #
 # Supported container runtimes
 # ----------------------------
 # Docker Desktop  — enable "Use Rosetta for x86_64/amd64 emulation on Apple Silicon"
-#                   in Settings → General for best emulation performance.
-# Rancher Desktop — select the "dockerd (moby)" container engine in Preferences →
-#                   Container Engine. x86_64 emulation runs via QEMU (slightly
-#                   slower than Rosetta but fully functional).
-#
-# Both expose a `docker` CLI that `kind` can use without extra configuration.
+#                   in Settings → General.
+# Rancher Desktop — select "dockerd (moby)" in Preferences → Container Engine.
 #
 # Required tools: docker, kind, kubectl, go (≥1.22), make
 
@@ -24,6 +26,9 @@ set -euo pipefail
 CLUSTER_NAME="${CLUSTER_NAME:-riak-local}"
 OPERATOR_IMG="${OPERATOR_IMG:-openriak-operator:dev}"
 NAMESPACE="openriak-system"
+
+# Run everything as linux/amd64 so the Riak image platform matches the cluster nodes.
+export DOCKER_DEFAULT_PLATFORM=linux/amd64
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -44,9 +49,8 @@ require docker kind kubectl go make
 ARCH=$(uname -m)
 [[ "$ARCH" == "arm64" ]] || echo "Warning: this script targets Apple Silicon (arm64), got: $ARCH"
 
-# Verify x86_64 emulation works before spending time on a Kind cluster.
-# Docker Desktop uses Rosetta 2; Rancher Desktop uses QEMU — both satisfy this check.
-info "Verifying x86_64 emulation..."
+# Verify x86_64 emulation is available before spending time on a cluster.
+info "Verifying x86_64 emulation (Rosetta 2 / QEMU)..."
 if ! docker run --rm --platform linux/amd64 --entrypoint /bin/true alpine:3.20 2>/dev/null; then
     cat >&2 <<'HINT'
 error: x86_64 emulation is not working. Fix for your runtime:
@@ -55,29 +59,29 @@ error: x86_64 emulation is not working. Fix for your runtime:
     enable "Use Rosetta for x86_64/amd64 emulation on Apple Silicon"
 
   Rancher Desktop → Preferences → Container Engine →
-    select "dockerd (moby)" (containerd does not support --platform for kind)
+    select "dockerd (moby)"
 HINT
     exit 1
 fi
 ok "x86_64 emulation working"
 
-# ── Kind cluster ─────────────────────────────────────────────────────────────
+# ── Kind cluster (amd64) ─────────────────────────────────────────────────────
 
 if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
     info "Kind cluster '${CLUSTER_NAME}' already exists — skipping creation"
 else
-    info "Creating Kind cluster '${CLUSTER_NAME}'..."
+    info "Creating amd64 Kind cluster '${CLUSTER_NAME}' (Rosetta 2 emulation)..."
     kind create cluster --name "$CLUSTER_NAME" --wait 2m
     ok "Cluster created"
 fi
 
 kubectl cluster-info --context "kind-${CLUSTER_NAME}" >/dev/null
 
-# ── Build operator image (linux/arm64, native speed) ─────────────────────────
+# ── Build operator image (linux/amd64 to match cluster nodes) ────────────────
 
-info "Building operator image for linux/arm64..."
+info "Building operator image for linux/amd64..."
 docker buildx build \
-    --platform linux/arm64 \
+    --platform linux/amd64 \
     --load \
     -t "$OPERATOR_IMG" \
     .
@@ -110,7 +114,8 @@ ok "RiakCluster created"
 
 cat <<'EOF'
 
-  Riak runs as x86_64 under emulation — first startup may take 2–3 minutes.
+  Riak runs as x86_64 on an amd64 Kind cluster (via Rosetta 2).
+  First pod startup may take 2–3 minutes.
 
   Watch progress:
     kubectl get riakcluster riak-local -w
