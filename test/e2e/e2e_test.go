@@ -332,6 +332,7 @@ spec:
 				{"kubectl", "delete", "riakbucket", bucketName, "-n", riakNS, "--ignore-not-found"},
 				{"kubectl", "delete", "riakcluster", clusterName, "-n", riakNS, "--ignore-not-found"},
 				{"kubectl", "delete", "secret", secretName, "-n", riakNS, "--ignore-not-found"},
+				{"kubectl", "delete", "riakcluster", "e2e-default-image", "-n", riakNS, "--ignore-not-found"},
 			} {
 				cmd := exec.Command(args[0], args[1:]...)
 				_, _ = utils.Run(cmd)
@@ -430,6 +431,36 @@ spec:
 			out, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(out).To(ContainSubstring(userName))
+		})
+
+		It("operator uses --riak-image default when spec.image is omitted", func() {
+			const defaultImageCluster = "e2e-default-image"
+
+			By("creating a RiakCluster without spec.image")
+			applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  storageClassName: standard
+  storageSize: 1Gi
+`, defaultImageCluster, riakNS))
+
+			By("verifying the StatefulSet uses the operator default image")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", defaultImageCluster,
+					"-n", riakNS, "-o", "jsonpath={.spec.template.spec.containers[0].image}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(Equal("ghcr.io/marthydavid/riak:3.2.6"))
+			}).Should(Succeed())
+
+			By("cleaning up the default-image cluster")
+			cmd := exec.Command("kubectl", "delete", "riakcluster", defaultImageCluster, "-n", riakNS)
+			_, _ = utils.Run(cmd)
 		})
 
 		It("all CRs are removed cleanly on deletion", func() {

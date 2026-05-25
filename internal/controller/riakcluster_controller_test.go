@@ -42,6 +42,15 @@ func reconcileCluster(ctx context.Context, name, namespace string) (*RiakCluster
 	return r, err
 }
 
+// reconcileClusterWithImage creates a reconciler with the given DefaultImage and calls Reconcile.
+func reconcileClusterWithImage(ctx context.Context, name, namespace, defaultImage string) (*RiakClusterReconciler, error) {
+	r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), DefaultImage: defaultImage}
+	_, err := r.Reconcile(ctx, reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: namespace},
+	})
+	return r, err
+}
+
 var _ = Describe("RiakCluster Controller", func() {
 	const ns = "default"
 	ctx := context.Background()
@@ -238,6 +247,150 @@ var _ = Describe("RiakCluster Controller", func() {
 			Expect(k8sClient.Get(ctx, nn, cluster)).To(Succeed())
 			Expect(cluster.Status.Phase).To(Equal(riakv1.PhaseReady))
 			Expect(cluster.Status.ReadyNodes).To(Equal(int32(1)))
+		})
+	})
+
+	Context("default image fallback", func() {
+		const clusterName = "default-image-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		It("uses DefaultImage when spec.image is empty", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1},
+			})).To(Succeed())
+
+			_, err := reconcileClusterWithImage(ctx, clusterName, ns, "custom/riak:test")
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("custom/riak:test"))
+		})
+
+		It("uses built-in default when DefaultImage and spec.image are both empty", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1},
+			})).To(Succeed())
+
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal(defaultRiakImage))
+		})
+
+		It("spec.image takes precedence over DefaultImage", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "explicit/riak:spec"},
+			})).To(Succeed())
+
+			_, err := reconcileClusterWithImage(ctx, clusterName, ns, "custom/riak:flag")
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("explicit/riak:spec"))
+		})
+	})
+
+	Context("TLS enabled", func() {
+		const clusterName = "tls-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		It("adds TLS volume, volume mount and SSL env vars to the StatefulSet", func() {
+			cluster := &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec: riakv1.RiakClusterSpec{
+					Size:  1,
+					Image: "basho/riak-kv:latest",
+					TLS: &riakv1.TLSConfig{
+						Enabled:     true,
+						CertManager: &riakv1.CertManagerConfig{IssuerName: "test-issuer", IssuerKind: "Issuer"},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+
+			// Call reconcileStatefulSet directly to avoid needing cert-manager CRDs in envtest.
+			r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			Expect(r.reconcileStatefulSet(ctx, cluster)).To(Succeed())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			By("checking TLS Secret volume is present")
+			var foundVolume bool
+			for _, v := range sts.Spec.Template.Spec.Volumes {
+				if v.Name == riakTLSVolumeName {
+					foundVolume = true
+					Expect(v.VolumeSource.Secret.SecretName).To(Equal(clusterTLSSecretName(clusterName)))
+				}
+			}
+			Expect(foundVolume).To(BeTrue(), "expected riak-tls volume in StatefulSet")
+
+			By("checking TLS volume mount is in the riak container")
+			container := sts.Spec.Template.Spec.Containers[0]
+			var foundMount bool
+			for _, m := range container.VolumeMounts {
+				if m.Name == riakTLSVolumeName {
+					foundMount = true
+					Expect(m.MountPath).To(Equal(riakTLSMountPath))
+					Expect(m.ReadOnly).To(BeTrue())
+				}
+			}
+			Expect(foundMount).To(BeTrue(), "expected riak-tls volume mount in riak container")
+
+			By("checking SSL env vars are injected")
+			envMap := make(map[string]string)
+			for _, e := range container.Env {
+				envMap[e.Name] = e.Value
+			}
+			Expect(envMap["RIAK_CONFIG_SSL__CERTFILE"]).To(Equal(riakTLSCertFile))
+			Expect(envMap["RIAK_CONFIG_SSL__KEYFILE"]).To(Equal(riakTLSKeyFile))
+			Expect(envMap["RIAK_CONFIG_SSL__CACERTFILE"]).To(Equal(riakTLSCACertFile))
+			Expect(envMap["RIAK_CONFIG_LISTENER__HTTPS__INTERNAL"]).To(Equal("0.0.0.0:8443"))
+
+			By("checking HTTPS container port 8443 is added")
+			var foundHTTPSPort bool
+			for _, p := range container.Ports {
+				if p.Name == "https" && p.ContainerPort == 8443 {
+					foundHTTPSPort = true
+				}
+			}
+			Expect(foundHTTPSPort).To(BeTrue(), "expected https container port 8443")
+		})
+
+		It("does not add TLS volume or SSL env vars when TLS is nil", func() {
+			cluster := &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
+			}
+			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+
+			r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			Expect(r.reconcileStatefulSet(ctx, cluster)).To(Succeed())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			for _, v := range sts.Spec.Template.Spec.Volumes {
+				Expect(v.Name).NotTo(Equal(riakTLSVolumeName))
+			}
+			container := sts.Spec.Template.Spec.Containers[0]
+			for _, e := range container.Env {
+				Expect(e.Name).NotTo(HavePrefix("RIAK_CONFIG_SSL__"))
+			}
+			for _, p := range container.Ports {
+				Expect(p.Name).NotTo(Equal("https"))
+			}
 		})
 	})
 
