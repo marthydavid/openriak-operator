@@ -94,10 +94,9 @@ jobs:
         env:
           IMG: ${{ env.IMG }}
           E2E_LOG_DIR: /tmp/e2e-logs
-          # Skip optional observability stacks — the suite tests operator behaviour,
-          # not Prometheus or cert-manager integration.
+          # Prometheus isn't exercised by any test; cert-manager is required by the
+          # mTLS suite, so BeforeSuite installs it (skips install if already present).
           PROMETHEUS_INSTALL_SKIP: "true"
-          CERT_MANAGER_INSTALL_SKIP: "true"
         run: |
           go mod tidy
           make test-e2e
