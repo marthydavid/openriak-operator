@@ -51,6 +51,7 @@ type RiakUserReconciler struct {
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakusers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile creates and manages Riak users in a cluster.

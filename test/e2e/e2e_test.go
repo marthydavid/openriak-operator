@@ -33,12 +33,20 @@ import (
 // collectDiagnostics gathers logs and events from the operator and Riak operand pods
 // and writes them to logDir so they can be uploaded as CI artifacts.
 func collectDiagnostics(controllerPodName string) {
+	collectDiagnosticsTo(logDir, controllerPodName)
+}
+
+// collectDiagnosticsTo writes the diagnostic snapshot into dir. AfterAll cleanup
+// hooks use a subdirectory so the pre-deletion state survives the later AfterEach
+// collection, which overwrites the files at the logDir root.
+func collectDiagnosticsTo(dir, controllerPodName string) {
+	_ = os.MkdirAll(dir, 0o755)
 	run := func(args ...string) string {
 		out, _ := utils.Run(exec.Command(args[0], args[1:]...))
 		return out
 	}
 	write := func(name, content string) {
-		_ = os.WriteFile(filepath.Join(logDir, name), []byte(content), 0o644)
+		_ = os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
 	}
 
 	write("operator.log", run("kubectl", "logs", controllerPodName, "-n", namespace, "--tail=1000"))
@@ -323,6 +331,10 @@ spec:
 		})
 
 		AfterAll(func() {
+			// Snapshot state before deleting anything: this AfterAll runs before the
+			// outer AfterEach, which would otherwise only capture post-deletion state.
+			collectDiagnosticsTo(filepath.Join(logDir, "pre-cleanup-lifecycle"), controllerPodName)
+
 			By("removing e2e Riak test resources (best-effort)")
 			for _, args := range [][]string{
 				{"kubectl", "delete", "riakuser", userName, "-n", riakNS, "--ignore-not-found"},
@@ -656,6 +668,12 @@ spec:
 	})
 
 	AfterAll(func() {
+		// controllerPodName from the Manager suite is out of scope here; look it up.
+		podName, _ := utils.Run(exec.Command("kubectl", "get", "pods",
+			"-l", "control-plane=controller-manager", "-n", namespace,
+			"-o", "jsonpath={.items[0].metadata.name}"))
+		collectDiagnosticsTo(filepath.Join(logDir, "pre-cleanup-mtls"), podName)
+
 		By("removing mTLS e2e resources (best-effort)")
 		for _, args := range [][]string{
 			{"kubectl", "delete", "riakuser", tlsUserName, "-n", tlsNS, "--ignore-not-found"},
