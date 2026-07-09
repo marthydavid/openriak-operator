@@ -152,6 +152,63 @@ func TestGrantUserPermission_withMember(t *testing.T) {
 	}
 }
 
+// ---------- CreateUserForCert ----------
+
+func TestManagerCreateUserForCert_noMembers(t *testing.T) {
+	m := newManager(func(_ context.Context, _ string, _ ...string) (string, error) {
+		return "", nil
+	})
+	err := m.CreateUserForCert(context.Background(), emptyCluster(), "certuser")
+	if err == nil || !strings.Contains(err.Error(), "no cluster members") {
+		t.Fatalf("expected 'no cluster members' error, got: %v", err)
+	}
+}
+
+func TestManagerCreateUserForCert_withMember(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security": ""}, nil)
+	m := newManager(runner)
+
+	err := m.CreateUserForCert(context.Background(), clusterWithMembers("pod-0"), "certuser")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var sawAddUser bool
+	for _, c := range *calls {
+		if strings.Contains(strings.Join(c.args, " "), "add-user certuser") {
+			sawAddUser = true
+		}
+	}
+	if !sawAddUser {
+		t.Error("expected add-user certuser to be called")
+	}
+}
+
+// ---------- AddSecuritySource ----------
+
+func TestManagerAddSecuritySource_noMembers(t *testing.T) {
+	m := newManager(func(_ context.Context, _ string, _ ...string) (string, error) {
+		return "", nil
+	})
+	err := m.AddSecuritySource(context.Background(), emptyCluster(), "certuser", "certificate")
+	if err == nil || !strings.Contains(err.Error(), "no cluster members") {
+		t.Fatalf("expected 'no cluster members' error, got: %v", err)
+	}
+}
+
+func TestManagerAddSecuritySource_withMember(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security add-source": ""}, nil)
+	m := newManager(runner)
+
+	err := m.AddSecuritySource(context.Background(), clusterWithMembers("pod-0"), "certuser", "certificate")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join((*calls)[0].args, " ")
+	if !strings.Contains(joined, "security add-source certuser 0.0.0.0/0 certificate") {
+		t.Errorf("unexpected call args: %s", joined)
+	}
+}
+
 // ---------- ConfigureNode ----------
 
 func TestConfigureNode_logsErrorAndContinues(t *testing.T) {

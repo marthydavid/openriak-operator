@@ -45,7 +45,7 @@ func mockRunner(responses map[string]string, errs map[string]error) (func(contex
 }
 
 func newTestExecutor(runner func(context.Context, string, ...string) (string, error)) *Executor {
-	return &Executor{log: logr.Discard(), runnerFn: runner}
+	return NewExecutorWithRunner(logr.Discard(), runner)
 }
 
 // ---------- NewExecutor / runShellCommand ----------
@@ -443,6 +443,20 @@ func TestCreateUserForCert_enablesSecurityAndAddsUserWithoutPassword(t *testing.
 	}
 	if passwordArg {
 		t.Error("expected no password= arg for cert-auth user")
+	}
+}
+
+func TestCreateUserForCert_failsOnEnableError(t *testing.T) {
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "security enable") {
+			return "", errors.New("network timeout")
+		}
+		return "", nil
+	}
+	e := newTestExecutor(runner)
+
+	if err := e.CreateUserForCert(context.Background(), "ns", "pod", "riak", "certuser"); err == nil {
+		t.Fatal("expected error from non-already enable failure, got nil")
 	}
 }
 

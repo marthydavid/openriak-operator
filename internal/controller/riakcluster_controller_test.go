@@ -26,6 +26,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -401,11 +403,10 @@ var _ = Describe("RiakCluster Controller", func() {
 
 		AfterEach(func() { cleanupCluster(clusterName) })
 
-		It("sets status to Failed and returns error when cert-manager CRD is absent", func() {
-			// When TLS is enabled with a valid issuerName, reconcileTLSCertificate calls
-			// r.Get for a cert-manager Certificate. envtest has no cert-manager CRDs, so
-			// Get returns a "resource not found" error (not IsNotFound), which propagates
-			// and exercises the error path in Reconcile (lines 96-103).
+		It("sets status to Failed and returns error when issuerName is missing", func() {
+			// TLS is enabled but certManager.issuerName is empty, so
+			// reconcileTLSCertificate returns an error that propagates through
+			// Reconcile's TLS error path (status → Failed, error returned).
 			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
 				Spec: riakv1.RiakClusterSpec{
@@ -413,7 +414,7 @@ var _ = Describe("RiakCluster Controller", func() {
 					Image: "basho/riak-kv:latest",
 					TLS: &riakv1.TLSConfig{
 						Enabled:     true,
-						CertManager: &riakv1.CertManagerConfig{IssuerName: "test-issuer"},
+						CertManager: &riakv1.CertManagerConfig{},
 					},
 				},
 			})).To(Succeed())
@@ -424,6 +425,65 @@ var _ = Describe("RiakCluster Controller", func() {
 			cluster := &riakv1.RiakCluster{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: ns}, cluster)).To(Succeed())
 			Expect(cluster.Status.Phase).To(Equal(riakv1.PhaseFailed))
+		})
+	})
+
+	Context("Reconcile with TLS enabled end to end", func() {
+		const clusterName = "tls-reconcile-ok"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		clusterCert := func() *unstructured.Unstructured {
+			cert := &unstructured.Unstructured{}
+			cert.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   certManagerGroup,
+				Version: certManagerVersion,
+				Kind:    certManagerKind,
+			})
+			cert.SetName(clusterCertName(clusterName))
+			cert.SetNamespace(ns)
+			return cert
+		}
+
+		AfterEach(func() {
+			cleanupCluster(clusterName)
+			_ = k8sClient.Delete(ctx, clusterCert())
+		})
+
+		It("creates the cert-manager Certificate along with the StatefulSet", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec: riakv1.RiakClusterSpec{
+					Size:  1,
+					Image: "basho/riak-kv:latest",
+					TLS: &riakv1.TLSConfig{
+						Enabled:     true,
+						CertManager: &riakv1.CertManagerConfig{IssuerName: "test-issuer", IssuerKind: "ClusterIssuer"},
+					},
+				},
+			})).To(Succeed())
+
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			// Second reconcile: Certificate already exists — idempotent path.
+			_, err = reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Certificate spec")
+			cert := clusterCert()
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterCertName(clusterName), Namespace: ns}, cert)).To(Succeed())
+			secretName, _, err := unstructured.NestedString(cert.Object, "spec", "secretName")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(secretName).To(Equal(clusterTLSSecretName(clusterName)))
+			issuerKind, _, err := unstructured.NestedString(cert.Object, "spec", "issuerRef", "kind")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(issuerKind).To(Equal("ClusterIssuer"))
+			dnsNames, _, err := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(dnsNames).To(ContainElement("*." + clusterName + "-headless." + ns + ".svc.cluster.local"))
+
+			By("verifying the StatefulSet was created too")
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 		})
 	})
 
