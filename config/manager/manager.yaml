@@ -63,6 +63,7 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --riak-image=ghcr.io/marthydavid/riak:3.2.6
         image: controller:latest
         name: manager
         securityContext:

@@ -82,9 +82,18 @@ jobs:
           docker load < /tmp/operator-image.tar
           kind load docker-image ${{ env.IMG }} --name e2e
 
+      - name: Pre-pull Riak operand image into Kind
+        # Pull the Riak image on the host and load it into Kind so the StatefulSet
+        # pods don't need to hit the registry during the test — avoids timeouts
+        # on the Ready-phase checks that wait for Riak to actually start.
+        run: |
+          docker pull ghcr.io/marthydavid/riak:3.2.6
+          kind load docker-image ghcr.io/marthydavid/riak:3.2.6 --name e2e
+
       - name: Run e2e tests
         env:
           IMG: ${{ env.IMG }}
+          E2E_LOG_DIR: /tmp/e2e-logs
           # Skip optional observability stacks — the suite tests operator behaviour,
           # not Prometheus or cert-manager integration.
           PROMETHEUS_INSTALL_SKIP: "true"
@@ -92,3 +101,11 @@ jobs:
         run: |
           go mod tidy
           make test-e2e
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ github.run_id }}
+          path: /tmp/e2e-logs/
+          retention-days: 7

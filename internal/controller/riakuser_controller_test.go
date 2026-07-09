@@ -606,6 +606,77 @@ var _ = Describe("RiakUser Controller", func() {
 		})
 	})
 
+	Context("certificate-auth — CertificateRef set", func() {
+		const clusterRefName = "cert-auth-cluster"
+		noopRunner := func(_ context.Context, _ string, _ ...string) (string, error) { return "", nil }
+
+		readyCertCluster := func() {
+			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
+			existing := &riakv1.RiakCluster{}
+			if err := k8sClient.Get(ctx, cnn, existing); err != nil && errors.IsNotFound(err) {
+				c := &riakv1.RiakCluster{
+					ObjectMeta: metav1.ObjectMeta{Name: clusterRefName, Namespace: ns},
+					Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
+				}
+				Expect(k8sClient.Create(ctx, c)).To(Succeed())
+				c.Status.Phase = riakv1.PhaseReady
+				c.Status.Members = []riakv1.RiakNodeMember{{Pod: clusterRefName + "-0", Name: clusterRefName + "-0"}}
+				Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+			}
+		}
+
+		cleanupCertCluster := func() {
+			c := &riakv1.RiakCluster{}
+			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
+			if err := k8sClient.Get(ctx, cnn, c); err == nil {
+				_ = k8sClient.Delete(ctx, c)
+				cr := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+				_, _ = cr.Reconcile(ctx, reconcile.Request{NamespacedName: cnn})
+			}
+		}
+
+		It("sets phase to Ready when CertificateRef is provided and mock executor succeeds", func() {
+			const userName = "user-cert-auth"
+			readyCertCluster()
+			defer cleanupCertCluster()
+
+			Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: clusterRefName,
+					Username:    "certuser",
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+					},
+				},
+			})).To(Succeed())
+
+			r := &RiakUserReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), noopRunner),
+			}
+			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: userName, Namespace: ns}}
+			// First reconcile: adds finalizer, sets status Creating
+			_, err := r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			// Second reconcile: cert-manager Certificate creation will fail (CRD not in envtest),
+			// so status goes to Failed — this confirms the cert path is taken, not the password path.
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			u := &riakv1.RiakUser{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, u)).To(Succeed())
+			// cert-manager CRDs are absent in envtest → reconcileUserCertificate returns an error
+			// and the controller sets Failed with "failed to reconcile certificate".
+			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
+			Expect(u.Status.Error).To(ContainSubstring("failed to reconcile certificate"))
+
+			_ = k8sClient.Delete(ctx, u)
+			_, _ = r.Reconcile(ctx, req)
+		})
+	})
+
 	Context("non-existent resource", func() {
 		It("returns no error for a missing user", func() {
 			Expect(reconcileUser(ctx, "does-not-exist", ns)).To(Succeed())

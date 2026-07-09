@@ -128,3 +128,24 @@ func (m *Manager) GrantUserPermission(ctx context.Context, cluster *riakv1.RiakC
 	pod := cluster.Status.Members[0].Pod
 	return m.executor.GrantPermission(ctx, cluster.Namespace, pod, "riak", username, resource, permission, bucket)
 }
+
+// CreateUserForCert creates a Riak user configured for certificate-based authentication.
+func (m *Manager) CreateUserForCert(ctx context.Context, cluster *riakv1.RiakCluster, username string) error {
+	if len(cluster.Status.Members) == 0 {
+		return fmt.Errorf("no cluster members available")
+	}
+
+	pod := cluster.Status.Members[0].Pod
+	return m.executor.CreateUserForCert(ctx, cluster.Namespace, pod, "riak", username)
+}
+
+// AddSecuritySource configures a Riak security source for a user.
+// sourceType is "password" or "certificate".
+func (m *Manager) AddSecuritySource(ctx context.Context, cluster *riakv1.RiakCluster, username, sourceType string) error {
+	if len(cluster.Status.Members) == 0 {
+		return fmt.Errorf("no cluster members available")
+	}
+
+	pod := cluster.Status.Members[0].Pod
+	return m.executor.AddSecuritySource(ctx, cluster.Namespace, pod, "riak", username, sourceType)
+}

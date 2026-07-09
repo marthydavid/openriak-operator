@@ -46,6 +46,15 @@ var (
 	// Locally, fall back to a sensible default so developers can run make test-e2e
 	// after a manual docker build.
 	projectImage = imageFromEnv()
+
+	// logDir is the directory where diagnostic logs are written after each test.
+	// Set E2E_LOG_DIR to override; defaults to /tmp/e2e-logs.
+	logDir = func() string {
+		if d := os.Getenv("E2E_LOG_DIR"); d != "" {
+			return d
+		}
+		return "/tmp/e2e-logs"
+	}()
 )
 
 func imageFromEnv() string {
@@ -66,6 +75,9 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	By("creating log directory")
+	Expect(os.MkdirAll(logDir, 0o755)).To(Succeed())
+
 	By("Ensure that Prometheus is enabled")
 	_ = utils.UncommentCode("config/default/kustomization.yaml", "#- ../prometheus", "#")
 

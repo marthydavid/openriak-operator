@@ -23,8 +23,11 @@ import (
 
 	"github.com/marthydavid/openriak-operator/internal/riak"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -48,6 +51,7 @@ type RiakUserReconciler struct {
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakusers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile creates and manages Riak users in a cluster.
 func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -106,64 +110,100 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	// Get password from secret
-	var password string
-	if user.Spec.PasswordSecret != nil {
-		secret := &corev1.Secret{}
-		secretKey := client.ObjectKey{
-			Namespace: user.Namespace,
-			Name:      user.Spec.PasswordSecret.Name,
-		}
-		if err := r.Get(ctx, secretKey, secret); err != nil {
-			log.Error(err, "failed to get password secret")
-			user.Status.Phase = riakv1.UserPhaseFailed
-			user.Status.Error = fmt.Sprintf("password secret not found: %v", err)
-			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
-				log.Error(updateErr, "failed to update user status")
-			}
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		key := user.Spec.PasswordSecret.Key
-		if key == "" {
-			key = "password"
-		}
-
-		if pwd, ok := secret.Data[key]; !ok {
-			err := fmt.Errorf("password key not found in secret: %s", key)
-			log.Error(err, "failed to extract password")
-			user.Status.Phase = riakv1.UserPhaseFailed
-			user.Status.Error = err.Error()
-			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
-				log.Error(updateErr, "failed to update user status")
-			}
-			return ctrl.Result{}, nil
-		} else {
-			password = string(pwd)
-		}
-	} else {
-		password = "changeme" // Default password
-	}
-
-	// Create user
 	executor := r.Executor
 	if executor == nil {
 		executor = riak.NewExecutor(log)
 	}
 	manager := riak.NewManager(executor, r.Client, log)
 
-	if err := manager.CreateUser(ctx, cluster, user.Spec.Username, password); err != nil {
-		log.Error(err, "failed to create user", "user", user.Spec.Username)
-		user.Status.Phase = riakv1.UserPhaseFailed
-		user.Status.Error = fmt.Sprintf("failed to create user: %v", err)
-		user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
-		if updateErr := r.Status().Update(ctx, user); updateErr != nil {
-			log.Error(updateErr, "failed to update user status")
+	if user.Spec.CertificateRef != nil {
+		// --- Certificate-based authentication path ---
+		// Create the cert-manager Certificate for the user's client certificate.
+		if err := r.reconcileUserCertificate(ctx, user); err != nil {
+			log.Error(err, "failed to reconcile user certificate")
+			user.Status.Phase = riakv1.UserPhaseFailed
+			user.Status.Error = fmt.Sprintf("failed to reconcile certificate: %v", err)
+			user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+
+		if err := manager.CreateUserForCert(ctx, cluster, user.Spec.Username); err != nil {
+			log.Error(err, "failed to create cert-auth user", "user", user.Spec.Username)
+			user.Status.Phase = riakv1.UserPhaseFailed
+			user.Status.Error = fmt.Sprintf("failed to create user: %v", err)
+			user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
+		if err := manager.AddSecuritySource(ctx, cluster, user.Spec.Username, "certificate"); err != nil {
+			log.Error(err, "failed to set certificate security source", "user", user.Spec.Username)
+			user.Status.Phase = riakv1.UserPhaseFailed
+			user.Status.Error = fmt.Sprintf("failed to set security source: %v", err)
+			user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+	} else {
+		// --- Password-based authentication path ---
+		var password string
+		if user.Spec.PasswordSecret != nil {
+			secret := &corev1.Secret{}
+			secretKey := client.ObjectKey{
+				Namespace: user.Namespace,
+				Name:      user.Spec.PasswordSecret.Name,
+			}
+			if err := r.Get(ctx, secretKey, secret); err != nil {
+				log.Error(err, "failed to get password secret")
+				user.Status.Phase = riakv1.UserPhaseFailed
+				user.Status.Error = fmt.Sprintf("password secret not found: %v", err)
+				if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+					log.Error(updateErr, "failed to update user status")
+				}
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
+
+			key := user.Spec.PasswordSecret.Key
+			if key == "" {
+				key = "password"
+			}
+
+			if pwd, ok := secret.Data[key]; !ok {
+				err := fmt.Errorf("password key not found in secret: %s", key)
+				log.Error(err, "failed to extract password")
+				user.Status.Phase = riakv1.UserPhaseFailed
+				user.Status.Error = err.Error()
+				if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+					log.Error(updateErr, "failed to update user status")
+				}
+				return ctrl.Result{}, nil
+			} else {
+				password = string(pwd)
+			}
+		} else {
+			password = "changeme" // Default password
+		}
+
+		if err := manager.CreateUser(ctx, cluster, user.Spec.Username, password); err != nil {
+			log.Error(err, "failed to create user", "user", user.Spec.Username)
+			user.Status.Phase = riakv1.UserPhaseFailed
+			user.Status.Error = fmt.Sprintf("failed to create user: %v", err)
+			user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 	}
 
-	// Grant permissions
+	// Grant permissions (applies to both auth paths)
 	for _, grant := range user.Spec.Grants {
 		if err := manager.GrantUserPermission(ctx, cluster, user.Spec.Username, grant.Resource, grant.Permission, grant.BucketName); err != nil {
 			log.Error(err, "failed to grant permission", "user", user.Spec.Username, "permission", grant.Permission)
@@ -189,4 +229,28 @@ func (r *RiakUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Named("riakuser").
 		Complete(r)
+}
+
+// reconcileUserCertificate creates a cert-manager Certificate for the RiakUser's client
+// certificate when spec.certificateRef is set. It is idempotent: a second call does nothing
+// if the Certificate already exists.
+func (r *RiakUserReconciler) reconcileUserCertificate(ctx context.Context, user *riakv1.RiakUser) error {
+	cert := buildUserCertificate(user.Name, user.Namespace, user.Spec.Username, user.Spec.CertificateRef)
+
+	if err := controllerutil.SetControllerReference(user, cert, r.Scheme); err != nil {
+		return fmt.Errorf("setting controller reference on user certificate: %w", err)
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   certManagerGroup,
+		Version: certManagerVersion,
+		Kind:    certManagerKind,
+	})
+
+	err := r.Get(ctx, client.ObjectKey{Name: cert.GetName(), Namespace: cert.GetNamespace()}, existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, cert)
+	}
+	return err
 }

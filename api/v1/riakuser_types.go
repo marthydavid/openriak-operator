@@ -36,6 +36,10 @@ type RiakUserSpec struct {
 
 	// Grants are the permissions to grant to this user.
 	Grants []Grant `json:"grants,omitempty"`
+
+	// CertificateRef enables mTLS client authentication via a cert-manager Certificate.
+	// When set, passwordSecret is ignored; Riak authenticates this user by client certificate.
+	CertificateRef *UserCertificateRef `json:"certificateRef,omitempty"`
 }
 
 // PasswordSecretRef references a Secret containing user password.
@@ -45,6 +49,29 @@ type PasswordSecretRef struct {
 
 	// Key is the key in the Secret containing the password.
 	Key string `json:"key,omitempty"`
+}
+
+// UserCertificateRef configures cert-manager to issue a client TLS certificate for this user.
+// When set, passwordSecret is ignored and Riak authenticates the user by client certificate.
+// The issued certificate's CommonName must match spec.username.
+type UserCertificateRef struct {
+	// IssuerRef references the cert-manager Issuer or ClusterIssuer to sign the certificate.
+	IssuerRef CertIssuerRef `json:"issuerRef"`
+
+	// SecretName is the Kubernetes Secret where cert-manager stores the issued certificate.
+	// Defaults to <riakuser-name>-client-tls.
+	SecretName string `json:"secretName,omitempty"`
+}
+
+// CertIssuerRef identifies a cert-manager Issuer or ClusterIssuer.
+type CertIssuerRef struct {
+	// Name is the issuer name.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Kind is the issuer kind: Issuer or ClusterIssuer. Defaults to Issuer.
+	// +kubebuilder:validation:Enum=Issuer;ClusterIssuer
+	Kind string `json:"kind,omitempty"`
 }
 
 // Grant represents a permission grant for a user.

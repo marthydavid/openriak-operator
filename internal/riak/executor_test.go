@@ -410,3 +410,94 @@ func TestGrantPermission_propagatesError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+// ---------- CreateUserForCert ----------
+
+func TestCreateUserForCert_enablesSecurityAndAddsUserWithoutPassword(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security": ""}, nil)
+	e := newTestExecutor(runner)
+
+	if err := e.CreateUserForCert(context.Background(), "ns", "pod", "riak", "certuser"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var hasEnable, hasAddUser bool
+	var passwordArg bool
+	for _, c := range *calls {
+		joined := strings.Join(c.args, " ")
+		if strings.Contains(joined, "security enable") {
+			hasEnable = true
+		}
+		if strings.Contains(joined, "add-user certuser") {
+			hasAddUser = true
+			if strings.Contains(joined, "password=") {
+				passwordArg = true
+			}
+		}
+	}
+	if !hasEnable {
+		t.Error("expected 'security enable' call")
+	}
+	if !hasAddUser {
+		t.Error("expected 'add-user certuser' call")
+	}
+	if passwordArg {
+		t.Error("expected no password= arg for cert-auth user")
+	}
+}
+
+func TestCreateUserForCert_ignoresAlreadyEnabledError(t *testing.T) {
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "security enable") {
+			return "", errors.New("security already enabled")
+		}
+		return "", nil
+	}
+	e := newTestExecutor(runner)
+
+	if err := e.CreateUserForCert(context.Background(), "ns", "pod", "riak", "certuser"); err != nil {
+		t.Fatalf("unexpected error for already-enabled: %v", err)
+	}
+}
+
+// ---------- AddSecuritySource ----------
+
+func TestAddSecuritySource_sendsCorrectArgs(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security add-source": ""}, nil)
+	e := newTestExecutor(runner)
+
+	if err := e.AddSecuritySource(context.Background(), "ns", "pod", "riak", "alice", "certificate"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(*calls))
+	}
+	joined := strings.Join((*calls)[0].args, " ")
+	if !strings.Contains(joined, "security add-source alice 0.0.0.0/0 certificate") {
+		t.Errorf("unexpected args: %s", joined)
+	}
+}
+
+func TestAddSecuritySource_passwordSourceType(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security add-source": ""}, nil)
+	e := newTestExecutor(runner)
+
+	if err := e.AddSecuritySource(context.Background(), "ns", "pod", "riak", "bob", "password"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join((*calls)[0].args, " ")
+	if !strings.Contains(joined, "add-source bob 0.0.0.0/0 password") {
+		t.Errorf("unexpected args: %s", joined)
+	}
+}
+
+func TestAddSecuritySource_propagatesError(t *testing.T) {
+	runner, _ := mockRunner(nil, map[string]error{"add-source": errors.New("source failed")})
+	e := newTestExecutor(runner)
+
+	err := e.AddSecuritySource(context.Background(), "ns", "pod", "riak", "alice", "certificate")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
