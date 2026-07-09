@@ -24,10 +24,13 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,12 +41,16 @@ import (
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
 )
 
-const riakClusterFinalizerName = "riak.openriak.io/cluster-finalizer"
+const (
+	riakClusterFinalizerName = "riak.openriak.io/cluster-finalizer"
+	defaultRiakImage         = "ghcr.io/marthydavid/riak:3.2.6"
+)
 
 // RiakClusterReconciler reconciles a RiakCluster object
 type RiakClusterReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme       *runtime.Scheme
+	DefaultImage string // fallback image when spec.image is empty; defaults to defaultRiakImage
 }
 
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch;create;update;patch;delete
@@ -52,6 +59,8 @@ type RiakClusterReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
+// +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile moves the current state of the cluster closer to the desired state.
 func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -84,6 +93,16 @@ func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
+	// Issue TLS certificates via cert-manager when TLS is enabled
+	if err := r.reconcileTLSCertificate(ctx, cluster); err != nil {
+		log.Error(err, "failed to reconcile TLS certificate")
+		cluster.Status.Phase = riakv1.PhaseFailed
+		if updateErr := r.Status().Update(ctx, cluster); updateErr != nil {
+			log.Error(updateErr, "failed to update cluster status")
+		}
+		return ctrl.Result{}, err
+	}
+
 	// Create StatefulSet
 	if err := r.reconcileStatefulSet(ctx, cluster); err != nil {
 		log.Error(err, "failed to reconcile StatefulSet")
@@ -108,12 +127,46 @@ func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 }
 
+// reconcileTLSCertificate creates or updates the cert-manager Certificate for the cluster
+// when spec.tls.enabled is true. It is a no-op when TLS is disabled.
+func (r *RiakClusterReconciler) reconcileTLSCertificate(ctx context.Context, cluster *riakv1.RiakCluster) error {
+	if cluster.Spec.TLS == nil || !cluster.Spec.TLS.Enabled {
+		return nil
+	}
+	if cluster.Spec.TLS.CertManager == nil || cluster.Spec.TLS.CertManager.IssuerName == "" {
+		return fmt.Errorf("spec.tls.certManager.issuerName must be set when tls.enabled is true")
+	}
+
+	cert := buildClusterCertificate(cluster)
+
+	// Set owner reference so the Certificate is garbage-collected with the cluster.
+	if err := controllerutil.SetControllerReference(cluster, cert, r.Scheme); err != nil {
+		return fmt.Errorf("setting controller reference on TLS certificate: %w", err)
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   certManagerGroup,
+		Version: certManagerVersion,
+		Kind:    certManagerKind,
+	})
+
+	err := r.Get(ctx, client.ObjectKey{Name: cert.GetName(), Namespace: cert.GetNamespace()}, existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, cert)
+	}
+	return err
+}
+
 func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluster *riakv1.RiakCluster) error {
 	log := log.FromContext(ctx)
 
 	image := cluster.Spec.Image
 	if image == "" {
-		image = "ghcr.io/marthydavid/riak:3.2.6"
+		image = r.DefaultImage
+	}
+	if image == "" {
+		image = defaultRiakImage
 	}
 
 	pullPolicy := cluster.Spec.ImagePullPolicy
@@ -160,6 +213,38 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 		})
 	}
 
+	// Inject TLS config via RIAK_CONFIG_* env vars (entrypoint maps these to riak.conf).
+	// ssl.certfile / ssl.keyfile / ssl.cacertfile configure Riak's SSL stack.
+	// listener.https.internal adds a TLS-enabled HTTPS endpoint on port 8443 alongside
+	// the existing plain HTTP listener on 8098 (used for health probes and backwards compat).
+	var extraVolumes []corev1.Volume
+	var extraVolumeMounts []corev1.VolumeMount
+	if cluster.Spec.TLS != nil && cluster.Spec.TLS.Enabled {
+		env = append(env,
+			corev1.EnvVar{Name: "RIAK_CONFIG_SSL__CERTFILE", Value: riakTLSCertFile},
+			corev1.EnvVar{Name: "RIAK_CONFIG_SSL__KEYFILE", Value: riakTLSKeyFile},
+			corev1.EnvVar{Name: "RIAK_CONFIG_SSL__CACERTFILE", Value: riakTLSCACertFile},
+			corev1.EnvVar{Name: "RIAK_CONFIG_LISTENER__HTTPS__INTERNAL", Value: "0.0.0.0:8443"},
+		)
+		extraVolumes = []corev1.Volume{
+			{
+				Name: riakTLSVolumeName,
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: clusterTLSSecretName(cluster.Name),
+					},
+				},
+			},
+		}
+		extraVolumeMounts = []corev1.VolumeMount{
+			{
+				Name:      riakTLSVolumeName,
+				MountPath: riakTLSMountPath,
+				ReadOnly:  true,
+			},
+		}
+	}
+
 	resources := &corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
 			corev1.ResourceCPU:    resource.MustParse("500m"),
@@ -168,6 +253,16 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 	}
 	if cluster.Spec.Resources != nil {
 		resources = cluster.Spec.Resources
+	}
+
+	volumeMounts := append([]corev1.VolumeMount{{Name: "data", MountPath: "/var/lib/riak"}}, extraVolumeMounts...)
+
+	containerPorts := []corev1.ContainerPort{
+		{Name: "protobuf", ContainerPort: 8087},
+		{Name: "http", ContainerPort: 8098},
+	}
+	if cluster.Spec.TLS != nil && cluster.Spec.TLS.Enabled {
+		containerPorts = append(containerPorts, corev1.ContainerPort{Name: riakTLSPortName, ContainerPort: riakTLSPort})
 	}
 
 	sts := &appsv1.StatefulSet{
@@ -196,26 +291,24 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 				},
 				Spec: corev1.PodSpec{
 					NodeSelector: cluster.Spec.NodeSelector,
+					Volumes:      extraVolumes,
 					Containers: []corev1.Container{
 						{
 							Name:            "riak",
 							Image:           image,
 							ImagePullPolicy: pullPolicy,
-							Ports: []corev1.ContainerPort{
-								{Name: "protobuf", ContainerPort: 8087},
-								{Name: "http", ContainerPort: 8098},
-							},
-							Env: env,
+							// The image entrypoint ends in `riak console`, which attaches an
+							// Erlang shell to stdin. Without an open stdin the shell reads EOF
+							// and the node exits 0 shortly after boot, crash-looping the pod.
+							Stdin: true,
+							TTY:   true,
+							Ports: containerPorts,
+							Env:   env,
 							Resources: corev1.ResourceRequirements{
 								Requests: resources.Requests,
 								Limits:   resources.Limits,
 							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "data",
-									MountPath: "/var/lib/riak",
-								},
-							},
+							VolumeMounts: volumeMounts,
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									Exec: &corev1.ExecAction{
@@ -292,7 +385,24 @@ func (r *RiakClusterReconciler) reconcileService(ctx context.Context, cluster *r
 		port = cluster.Spec.ServicePort
 	}
 
-	// Headless service for cluster communication
+	// Extra service ports when TLS is enabled: expose the HTTPS listener on 8443.
+	tlsEnabled := cluster.Spec.TLS != nil && cluster.Spec.TLS.Enabled
+	basePorts := func() []corev1.ServicePort {
+		ports := []corev1.ServicePort{
+			{Name: "protobuf", Port: port, TargetPort: intstr.FromString("protobuf")},
+			{Name: "http", Port: 8098, TargetPort: intstr.FromString("http")},
+		}
+		if tlsEnabled {
+			ports = append(ports, corev1.ServicePort{
+				Name:       riakTLSPortName,
+				Port:       riakTLSPort,
+				TargetPort: intstr.FromString(riakTLSPortName),
+			})
+		}
+		return ports
+	}
+
+	// Headless service for inter-node Erlang distribution
 	headlessSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cluster.Name + "-headless",
@@ -302,26 +412,11 @@ func (r *RiakClusterReconciler) reconcileService(ctx context.Context, cluster *r
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, headlessSvc, func() error {
 		headlessSvc.Spec = corev1.ServiceSpec{
-			ClusterIP: corev1.ClusterIPNone,
-			Selector: map[string]string{
-				"app":     "riak",
-				"cluster": cluster.Name,
-			},
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "protobuf",
-					Port:       port,
-					TargetPort: intstr.FromString("protobuf"),
-				},
-				{
-					Name:       "http",
-					Port:       8098,
-					TargetPort: intstr.FromString("http"),
-				},
-			},
+			ClusterIP:                corev1.ClusterIPNone,
+			Selector:                 map[string]string{"app": "riak", "cluster": cluster.Name},
+			Ports:                    basePorts(),
 			PublishNotReadyAddresses: true,
 		}
-
 		return controllerutil.SetControllerReference(cluster, headlessSvc, r.Scheme)
 	})
 
@@ -340,25 +435,10 @@ func (r *RiakClusterReconciler) reconcileService(ctx context.Context, cluster *r
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, clientSvc, func() error {
 		clientSvc.Spec = corev1.ServiceSpec{
-			Type: corev1.ServiceTypeClusterIP,
-			Selector: map[string]string{
-				"app":     "riak",
-				"cluster": cluster.Name,
-			},
-			Ports: []corev1.ServicePort{
-				{
-					Name:       "protobuf",
-					Port:       port,
-					TargetPort: intstr.FromString("protobuf"),
-				},
-				{
-					Name:       "http",
-					Port:       8098,
-					TargetPort: intstr.FromString("http"),
-				},
-			},
+			Type:     corev1.ServiceTypeClusterIP,
+			Selector: map[string]string{"app": "riak", "cluster": cluster.Name},
+			Ports:    basePorts(),
 		}
-
 		return controllerutil.SetControllerReference(cluster, clientSvc, r.Scheme)
 	})
 

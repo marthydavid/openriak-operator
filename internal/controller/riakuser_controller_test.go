@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
@@ -26,6 +27,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -603,6 +606,170 @@ var _ = Describe("RiakUser Controller", func() {
 				NamespacedName: types.NamespacedName{Name: userName, Namespace: ns},
 			})
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Context("certificate-auth — CertificateRef set", func() {
+		const clusterRefName = "cert-auth-cluster"
+		noopRunner := func(_ context.Context, _ string, _ ...string) (string, error) { return "", nil }
+
+		readyCertCluster := func() {
+			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
+			existing := &riakv1.RiakCluster{}
+			if err := k8sClient.Get(ctx, cnn, existing); err != nil && errors.IsNotFound(err) {
+				c := &riakv1.RiakCluster{
+					ObjectMeta: metav1.ObjectMeta{Name: clusterRefName, Namespace: ns},
+					Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
+				}
+				Expect(k8sClient.Create(ctx, c)).To(Succeed())
+				c.Status.Phase = riakv1.PhaseReady
+				c.Status.Members = []riakv1.RiakNodeMember{{Pod: clusterRefName + "-0", Name: clusterRefName + "-0"}}
+				Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+			}
+		}
+
+		cleanupCertCluster := func() {
+			c := &riakv1.RiakCluster{}
+			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
+			if err := k8sClient.Get(ctx, cnn, c); err == nil {
+				_ = k8sClient.Delete(ctx, c)
+				cr := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+				_, _ = cr.Reconcile(ctx, reconcile.Request{NamespacedName: cnn})
+			}
+		}
+
+		newUserCert := func(userName string) *unstructured.Unstructured {
+			cert := &unstructured.Unstructured{}
+			cert.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   certManagerGroup,
+				Version: certManagerVersion,
+				Kind:    certManagerKind,
+			})
+			cert.SetName(userCertName(userName))
+			cert.SetNamespace(ns)
+			return cert
+		}
+
+		cleanupCertUser := func(r *RiakUserReconciler, userName string) {
+			u := &riakv1.RiakUser{}
+			nn := types.NamespacedName{Name: userName, Namespace: ns}
+			if err := k8sClient.Get(ctx, nn, u); err == nil {
+				_ = k8sClient.Delete(ctx, u)
+				_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			}
+			_ = k8sClient.Delete(ctx, newUserCert(userName))
+		}
+
+		makeCertUser := func(userName, username string) {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: clusterRefName,
+					Username:    username,
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+					},
+				},
+			})).To(Succeed())
+		}
+
+		It("creates the Certificate and sets phase to Ready when the executor succeeds", func() {
+			const userName = "user-cert-auth"
+			readyCertCluster()
+			defer cleanupCertCluster()
+
+			makeCertUser(userName, "certuser")
+
+			r := &RiakUserReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), noopRunner),
+			}
+			defer cleanupCertUser(r, userName)
+			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: userName, Namespace: ns}}
+			// First reconcile: adds finalizer, sets status Creating
+			_, err := r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			// Second reconcile: creates the Certificate, cert-auth user and security source
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			// Third reconcile: Certificate already exists — exercises the idempotent path
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			u := &riakv1.RiakUser{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, u)).To(Succeed())
+			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseReady))
+			Expect(u.Status.Created).To(BeTrue())
+
+			By("verifying the cert-manager Certificate was created with CN = Riak username")
+			cert := newUserCert(userName)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userCertName(userName), Namespace: ns}, cert)).To(Succeed())
+			cn, _, err := unstructured.NestedString(cert.Object, "spec", "commonName")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cn).To(Equal("certuser"))
+		})
+
+		It("sets phase to Failed when cert-auth user creation fails", func() {
+			const userName = "user-cert-auth-adduser-fail"
+			readyCertCluster()
+			defer cleanupCertCluster()
+
+			makeCertUser(userName, "certfailuser")
+
+			failAddUser := func(_ context.Context, _ string, args ...string) (string, error) {
+				if strings.Contains(strings.Join(args, " "), "add-user") {
+					return "", fmt.Errorf("add-user exec failed")
+				}
+				return "", nil
+			}
+			r := &RiakUserReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), failAddUser),
+			}
+			defer cleanupCertUser(r, userName)
+			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: userName, Namespace: ns}}
+			_, err := r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			u := &riakv1.RiakUser{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, u)).To(Succeed())
+			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
+			Expect(u.Status.Error).To(ContainSubstring("failed to create user"))
+		})
+
+		It("sets phase to Failed when setting the certificate security source fails", func() {
+			const userName = "user-cert-auth-source-fail"
+			readyCertCluster()
+			defer cleanupCertCluster()
+
+			makeCertUser(userName, "certsourceuser")
+
+			failAddSource := func(_ context.Context, _ string, args ...string) (string, error) {
+				if strings.Contains(strings.Join(args, " "), "add-source") {
+					return "", fmt.Errorf("add-source exec failed")
+				}
+				return "", nil
+			}
+			r := &RiakUserReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), failAddSource),
+			}
+			defer cleanupCertUser(r, userName)
+			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: userName, Namespace: ns}}
+			_, err := r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+
+			u := &riakv1.RiakUser{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, u)).To(Succeed())
+			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
+			Expect(u.Status.Error).To(ContainSubstring("failed to set security source"))
 		})
 	})
 

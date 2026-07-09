@@ -39,6 +39,37 @@ spec:
           spec:
             description: RiakUserSpec defines the desired state of RiakUser.
             properties:
+              certificateRef:
+                description: |-
+                  CertificateRef enables mTLS client authentication via a cert-manager Certificate.
+                  When set, passwordSecret is ignored; Riak authenticates this user by client certificate.
+                properties:
+                  issuerRef:
+                    description: IssuerRef references the cert-manager Issuer or ClusterIssuer
+                      to sign the certificate.
+                    properties:
+                      kind:
+                        description: 'Kind is the issuer kind: Issuer or ClusterIssuer.
+                          Defaults to Issuer.'
+                        enum:
+                        - Issuer
+                        - ClusterIssuer
+                        type: string
+                      name:
+                        description: Name is the issuer name.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  secretName:
+                    description: |-
+                      SecretName is the Kubernetes Secret where cert-manager stores the issued certificate.
+                      Defaults to <riakuser-name>-client-tls.
+                    type: string
+                required:
+                - issuerRef
+                type: object
               clusterName:
                 description: ClusterName is the name of the RiakCluster this user
                   belongs to.

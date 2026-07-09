@@ -46,6 +46,7 @@ type RiakBucketReconciler struct {
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakbuckets/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakbuckets/finalizers,verbs=update
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 
 // Reconcile creates and manages Riak buckets in a cluster.
 func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

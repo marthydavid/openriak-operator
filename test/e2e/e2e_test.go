@@ -30,6 +30,35 @@ import (
 	"github.com/marthydavid/openriak-operator/test/utils"
 )
 
+// collectDiagnostics gathers logs and events from the operator and Riak operand pods
+// and writes them to logDir so they can be uploaded as CI artifacts.
+func collectDiagnostics(controllerPodName string) {
+	collectDiagnosticsTo(logDir, controllerPodName)
+}
+
+// collectDiagnosticsTo writes the diagnostic snapshot into dir. AfterAll cleanup
+// hooks use a subdirectory so the pre-deletion state survives the later AfterEach
+// collection, which overwrites the files at the logDir root.
+func collectDiagnosticsTo(dir, controllerPodName string) {
+	_ = os.MkdirAll(dir, 0o755)
+	run := func(args ...string) string {
+		out, _ := utils.Run(exec.Command(args[0], args[1:]...))
+		return out
+	}
+	write := func(name, content string) {
+		_ = os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
+	}
+
+	write("operator.log", run("kubectl", "logs", controllerPodName, "-n", namespace, "--tail=1000"))
+	write("riak-pods.log", run("kubectl", "logs", "-n", "default", "-l", "app=riak", "--tail=500", "--prefix=true"))
+	write("riak-pods-describe.log", run("kubectl", "describe", "pods", "-n", "default", "-l", "app=riak"))
+	write("events-default.log", run("kubectl", "get", "events", "-n", "default", "--sort-by=.lastTimestamp"))
+	write("events-operator.log", run("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp"))
+	write("riakclusters.log", run("kubectl", "get", "riakclusters", "-A", "-o", "yaml"))
+	write("riakbuckets.log", run("kubectl", "get", "riakbuckets", "-A", "-o", "yaml"))
+	write("riakusers.log", run("kubectl", "get", "riakusers", "-A", "-o", "yaml"))
+}
+
 // namespace where the project is deployed in
 const namespace = "agents-riak-operator-kubernetes-lifecycle-system"
 
@@ -84,45 +113,21 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 	})
 
-	// After each test, check for failures and collect logs, events,
-	// and pod descriptions for debugging.
+	// After each test, always collect diagnostics to logDir for CI artifact upload.
+	// On failure, also echo key logs to GinkgoWriter for immediate visibility.
 	AfterEach(func() {
+		collectDiagnostics(controllerPodName)
+
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
-			By("Fetching controller manager pod logs")
-			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-			controllerLogs, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Controller logs: %s", err)
+			if logs, err := os.ReadFile(filepath.Join(logDir, "operator.log")); err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "=== operator logs ===\n%s\n", logs)
 			}
-
-			By("Fetching Kubernetes events")
-			cmd = exec.Command("kubectl", "get", "events", "-n", namespace, "--sort-by=.lastTimestamp")
-			eventsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
+			if logs, err := os.ReadFile(filepath.Join(logDir, "events-default.log")); err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "=== events (default) ===\n%s\n", logs)
 			}
-
-			By("Fetching curl-metrics logs")
-			cmd = exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-			metricsOutput, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
-			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get curl-metrics logs: %s", err)
-			}
-
-			By("Fetching controller manager pod description")
-			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
-			podDescription, err := utils.Run(cmd)
-			if err == nil {
-				fmt.Println("Pod description:\n", podDescription)
-			} else {
-				fmt.Println("Failed to describe controller pod")
+			if logs, err := os.ReadFile(filepath.Join(logDir, "riak-pods.log")); err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "=== riak pod logs ===\n%s\n", logs)
 			}
 		}
 	})
@@ -326,12 +331,17 @@ spec:
 		})
 
 		AfterAll(func() {
+			// Snapshot state before deleting anything: this AfterAll runs before the
+			// outer AfterEach, which would otherwise only capture post-deletion state.
+			collectDiagnosticsTo(filepath.Join(logDir, "pre-cleanup-lifecycle"), controllerPodName)
+
 			By("removing e2e Riak test resources (best-effort)")
 			for _, args := range [][]string{
 				{"kubectl", "delete", "riakuser", userName, "-n", riakNS, "--ignore-not-found"},
 				{"kubectl", "delete", "riakbucket", bucketName, "-n", riakNS, "--ignore-not-found"},
 				{"kubectl", "delete", "riakcluster", clusterName, "-n", riakNS, "--ignore-not-found"},
 				{"kubectl", "delete", "secret", secretName, "-n", riakNS, "--ignore-not-found"},
+				{"kubectl", "delete", "riakcluster", "e2e-default-image", "-n", riakNS, "--ignore-not-found"},
 			} {
 				cmd := exec.Command(args[0], args[1:]...)
 				_, _ = utils.Run(cmd)
@@ -372,6 +382,26 @@ spec:
 			}).Should(Succeed())
 		})
 
+		It("RiakCluster reaches Ready phase once Riak pod is running", func() {
+			// Riak needs to pull its image and pass liveness/readiness probes before
+			// the operator transitions to Ready. Allow up to 5 minutes.
+			By("waiting for RiakCluster status.phase == Ready")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
+					"-n", riakNS, "-o", "jsonpath={.status.phase}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(Equal("Ready"))
+			}, 5*time.Minute, 10*time.Second).Should(Succeed())
+
+			By("verifying readyNodes equals the cluster size")
+			cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
+				"-n", riakNS, "-o", "jsonpath={.status.readyNodes}")
+			out, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(Equal("1"))
+		})
+
 		It("operator sets a finalizer and a status phase for the RiakBucket", func() {
 			By("verifying the operator sets a finalizer on the RiakBucket")
 			Eventually(func(g Gomega) {
@@ -390,6 +420,19 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).NotTo(BeEmpty())
 			}).Should(Succeed())
+		})
+
+		It("RiakBucket reaches Ready phase once the cluster is Ready", func() {
+			// The bucket controller only reconciles when cluster.status.phase == Ready,
+			// so this check is meaningful only after the cluster Ready test passes.
+			By("waiting for RiakBucket status.phase == Ready")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakbucket", bucketName,
+					"-n", riakNS, "-o", "jsonpath={.status.phase}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(Equal("Ready"))
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("operator sets a finalizer and a status phase for the RiakUser", func() {
@@ -412,6 +455,17 @@ spec:
 			}).Should(Succeed())
 		})
 
+		It("RiakUser reaches Ready phase once the cluster is Ready", func() {
+			By("waiting for RiakUser status.phase == Ready")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "riakuser", userName,
+					"-n", riakNS, "-o", "jsonpath={.status.phase}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(Equal("Ready"))
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
 		It("all three CR types appear in kubectl get", func() {
 			By("listing RiakClusters")
 			cmd := exec.Command("kubectl", "get", "riakclusters", "-n", riakNS)
@@ -430,6 +484,36 @@ spec:
 			out, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(out).To(ContainSubstring(userName))
+		})
+
+		It("operator uses --riak-image default when spec.image is omitted", func() {
+			const defaultImageCluster = "e2e-default-image"
+
+			By("creating a RiakCluster without spec.image")
+			applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  storageClassName: standard
+  storageSize: 1Gi
+`, defaultImageCluster, riakNS))
+
+			By("verifying the StatefulSet uses the operator default image")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "statefulset", defaultImageCluster,
+					"-n", riakNS, "-o", "jsonpath={.spec.template.spec.containers[0].image}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(Equal("ghcr.io/marthydavid/riak:3.2.6"))
+			}).Should(Succeed())
+
+			By("cleaning up the default-image cluster")
+			cmd := exec.Command("kubectl", "delete", "riakcluster", defaultImageCluster, "-n", riakNS)
+			_, _ = utils.Run(cmd)
 		})
 
 		It("all CRs are removed cleanly on deletion", func() {
@@ -463,6 +547,205 @@ spec:
 				g.Expect(err).To(HaveOccurred())
 			}).Should(Succeed())
 		})
+	})
+})
+
+// ── mTLS with cert-manager ────────────────────────────────────────────────────
+// Creates a self-signed CA chain via cert-manager, then creates a RiakCluster
+// with TLS enabled and a RiakUser using certificate-based auth. Verifies that
+// cert-manager Certificate objects are created and the StatefulSet is configured
+// with the TLS volume/mount/port.
+var _ = Describe("Riak mTLS", Ordered, func() {
+	const (
+		tlsNS            = "default"
+		tlsClusterName   = "e2e-tls-cluster"
+		tlsUserName      = "e2e-tls-user"
+		selfSignedIssuer = "e2e-selfsigned"
+		caSecretName     = "e2e-riak-ca-secret"
+		caCertName       = "e2e-riak-ca"
+		caIssuerName     = "e2e-ca-issuer"
+	)
+
+	applyManifest := func(yaml string) {
+		f, err := os.CreateTemp("", "e2e-tls-*.yaml")
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		_, err = fmt.Fprint(f, yaml)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		ExpectWithOffset(1, f.Close()).To(Succeed())
+		defer func() { _ = os.Remove(f.Name()) }()
+		cmd := exec.Command("kubectl", "apply", "-f", f.Name())
+		_, err = utils.Run(cmd)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	}
+
+	BeforeAll(func() {
+		By("checking cert-manager CRD is installed")
+		cmd := exec.Command("kubectl", "get", "crd", "certificates.cert-manager.io")
+		_, err := utils.Run(cmd)
+		if err != nil {
+			Skip("cert-manager not installed — skipping mTLS tests")
+		}
+
+		By("creating self-signed Issuer")
+		applyManifest(fmt.Sprintf(`
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  selfSigned: {}
+`, selfSignedIssuer, tlsNS))
+
+		By("creating a self-signed CA Certificate")
+		applyManifest(fmt.Sprintf(`
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  isCA: true
+  commonName: riak-e2e-ca
+  secretName: %s
+  issuerRef:
+    name: %s
+    kind: Issuer
+`, caCertName, tlsNS, caSecretName, selfSignedIssuer))
+
+		By("waiting for the CA Secret to be created")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "secret", caSecretName, "-n", tlsNS)
+			_, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		By("creating CA-backed Issuer")
+		applyManifest(fmt.Sprintf(`
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  ca:
+    secretName: %s
+`, caIssuerName, tlsNS, caSecretName))
+
+		By("creating a RiakCluster with TLS enabled")
+		applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  image: ghcr.io/marthydavid/riak:3.2.6
+  storageClassName: standard
+  storageSize: 1Gi
+  tls:
+    enabled: true
+    certManager:
+      issuerName: %s
+`, tlsClusterName, tlsNS, caIssuerName))
+
+		By("creating a RiakUser with certificate auth")
+		applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakUser
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  clusterName: %s
+  username: e2etlsuser
+  certificateRef:
+    issuerRef:
+      name: %s
+      kind: Issuer
+`, tlsUserName, tlsNS, tlsClusterName, caIssuerName))
+	})
+
+	AfterAll(func() {
+		// controllerPodName from the Manager suite is out of scope here; look it up.
+		podName, _ := utils.Run(exec.Command("kubectl", "get", "pods",
+			"-l", "control-plane=controller-manager", "-n", namespace,
+			"-o", "jsonpath={.items[0].metadata.name}"))
+		collectDiagnosticsTo(filepath.Join(logDir, "pre-cleanup-mtls"), podName)
+
+		By("removing mTLS e2e resources (best-effort)")
+		for _, args := range [][]string{
+			{"kubectl", "delete", "riakuser", tlsUserName, "-n", tlsNS, "--ignore-not-found"},
+			{"kubectl", "delete", "riakcluster", tlsClusterName, "-n", tlsNS, "--ignore-not-found"},
+			{"kubectl", "delete", "issuer", caIssuerName, "-n", tlsNS, "--ignore-not-found"},
+			{"kubectl", "delete", "certificate", caCertName, "-n", tlsNS, "--ignore-not-found"},
+			{"kubectl", "delete", "issuer", selfSignedIssuer, "-n", tlsNS, "--ignore-not-found"},
+			{"kubectl", "delete", "secret", caSecretName, "-n", tlsNS, "--ignore-not-found"},
+		} {
+			cmd := exec.Command(args[0], args[1:]...)
+			_, _ = utils.Run(cmd)
+		}
+	})
+
+	It("operator creates a cert-manager Certificate for the RiakCluster", func() {
+		By("verifying cert-manager Certificate for the cluster exists")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "certificate", tlsClusterName+"-tls", "-n", tlsNS)
+			_, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+		}).Should(Succeed())
+	})
+
+	It("operator creates a cert-manager Certificate for the RiakUser", func() {
+		By("verifying cert-manager Certificate for the user exists")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "certificate", tlsUserName+"-client-tls", "-n", tlsNS)
+			_, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+		}).Should(Succeed())
+	})
+
+	It("StatefulSet has TLS volume and https port", func() {
+		By("verifying the riak-tls volume is present on the StatefulSet")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "statefulset", tlsClusterName,
+				"-n", tlsNS, "-o", "jsonpath={.spec.template.spec.volumes[*].name}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(ContainSubstring("riak-tls"))
+		}).Should(Succeed())
+
+		By("verifying the https container port is present on the StatefulSet")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "statefulset", tlsClusterName,
+				"-n", tlsNS, "-o", "jsonpath={.spec.template.spec.containers[0].ports[*].name}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(ContainSubstring("https"))
+		}).Should(Succeed())
+	})
+
+	It("operator sets a finalizer on the TLS RiakCluster", func() {
+		By("verifying the operator sets a finalizer on the TLS RiakCluster")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "riakcluster", tlsClusterName,
+				"-n", tlsNS, "-o", "jsonpath={.metadata.finalizers[0]}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(ContainSubstring("riak.openriak.io"))
+		}).Should(Succeed())
+	})
+
+	It("operator sets a finalizer on the certificate RiakUser", func() {
+		By("verifying the operator sets a finalizer on the certificate RiakUser")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "riakuser", tlsUserName,
+				"-n", tlsNS, "-o", "jsonpath={.metadata.finalizers[0]}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(ContainSubstring("riak.openriak.io"))
+		}).Should(Succeed())
 	})
 })
 
