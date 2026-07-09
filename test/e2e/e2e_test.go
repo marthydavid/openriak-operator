@@ -557,14 +557,19 @@ spec:
 // with the TLS volume/mount/port.
 var _ = Describe("Riak mTLS", Ordered, func() {
 	const (
-		tlsNS            = "default"
-		tlsClusterName   = "e2e-tls-cluster"
-		tlsUserName      = "e2e-tls-user"
-		selfSignedIssuer = "e2e-selfsigned"
-		caSecretName     = "e2e-riak-ca-secret"
-		caCertName       = "e2e-riak-ca"
-		caIssuerName     = "e2e-ca-issuer"
+		tlsNS              = "default"
+		tlsClusterName     = "e2e-tls-cluster"
+		tlsUserName        = "e2e-tls-user"
+		selfSignedIssuer   = "e2e-selfsigned"
+		caSecretName       = "e2e-riak-ca-secret"
+		caCertName         = "e2e-riak-ca"
+		caIssuerName       = "e2e-ca-issuer"
+		dummyClientPodName = "e2e-tls-dummy-client"
 	)
+
+	// clientCertSecretName is the Secret cert-manager populates with the dummy
+	// client's issued certificate (userClientTLSSecretName in tls.go).
+	clientCertSecretName := tlsUserName + "-client-tls"
 
 	applyManifest := func(yaml string) {
 		f, err := os.CreateTemp("", "e2e-tls-*.yaml")
@@ -676,6 +681,7 @@ spec:
 
 		By("removing mTLS e2e resources (best-effort)")
 		for _, args := range [][]string{
+			{"kubectl", "delete", "pod", dummyClientPodName, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "riakuser", tlsUserName, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "riakcluster", tlsClusterName, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "issuer", caIssuerName, "-n", tlsNS, "--ignore-not-found"},
@@ -688,22 +694,35 @@ spec:
 		}
 	})
 
-	It("operator creates a cert-manager Certificate for the RiakCluster", func() {
-		By("verifying cert-manager Certificate for the cluster exists")
+	It("operator creates a cert-manager Certificate for the RiakCluster and it becomes Ready", func() {
+		By("verifying the self-signed-issuer-backed cluster Certificate is issued")
 		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "certificate", tlsClusterName+"-tls", "-n", tlsNS)
-			_, err := utils.Run(cmd)
+			cmd := exec.Command("kubectl", "get", "certificate", tlsClusterName+"-tls", "-n", tlsNS,
+				"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+			out, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
-		}).Should(Succeed())
+			g.Expect(out).To(Equal("True"))
+		}, 2*time.Minute, 2*time.Second).Should(Succeed())
 	})
 
-	It("operator creates a cert-manager Certificate for the RiakUser", func() {
-		By("verifying cert-manager Certificate for the user exists")
+	It("operator creates a cert-manager Certificate for the RiakUser (dummy mTLS client cert) and it becomes Ready", func() {
+		By("verifying the self-signed-issuer-backed client Certificate is issued")
 		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "certificate", tlsUserName+"-client-tls", "-n", tlsNS)
-			_, err := utils.Run(cmd)
+			cmd := exec.Command("kubectl", "get", "certificate", tlsUserName+"-client-tls", "-n", tlsNS,
+				"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+			out, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
-		}).Should(Succeed())
+			g.Expect(out).To(Equal("True"))
+		}, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+		By("verifying cert-manager populated the client certificate Secret")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "secret", clientCertSecretName, "-n", tlsNS,
+				"-o", "jsonpath={.data.tls\\.crt}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).NotTo(BeEmpty())
+		}, 2*time.Minute, 2*time.Second).Should(Succeed())
 	})
 
 	It("StatefulSet has TLS volume and https port", func() {
@@ -746,6 +765,69 @@ spec:
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(out).To(ContainSubstring("riak.openriak.io"))
 		}).Should(Succeed())
+	})
+
+	It("a dummy client completes a verified mTLS handshake with Riak using the issued certificate", func() {
+		By("waiting for the TLS RiakCluster to reach Ready phase")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "riakcluster", tlsClusterName,
+				"-n", tlsNS, "-o", "jsonpath={.status.phase}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("Ready"))
+		}, 5*time.Minute, 5*time.Second).Should(Succeed())
+
+		// Riak's certificate-based auth (security add-source ... certificate) is
+		// negotiated over the protobuf port's STARTTLS upgrade, which a shell-only
+		// e2e client can't easily speak. Instead this dummy client connects to the
+		// operator-configured HTTPS listener (8443) presenting the dummy RiakUser's
+		// issued client certificate. A successful, hostname-verified TLS handshake
+		// there proves the whole chain — self-signed Issuer -> CA Certificate ->
+		// CA-backed Issuer -> server/client Certificates -> Secrets -> mounted into
+		// pods — produces certificates a real client can actually use against the
+		// running Riak server, not just Kubernetes objects that exist on paper.
+		By("creating a dummy mTLS client Pod that presents the issued certificate to Riak")
+		applyManifest(fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  restartPolicy: Never
+  containers:
+    - name: dummy-client
+      image: curlimages/curl:7.78.0
+      command: ["/bin/sh", "-c"]
+      args:
+        - "curl -v --cacert /certs/ca.crt --cert /certs/tls.crt --key /certs/tls.key https://%s.%s.svc.cluster.local:8443/ping"
+      volumeMounts:
+        - name: client-tls
+          mountPath: /certs
+          readOnly: true
+  volumes:
+    - name: client-tls
+      secret:
+        secretName: %s
+`, dummyClientPodName, tlsNS, tlsClusterName, tlsNS, clientCertSecretName))
+
+		By("waiting for the dummy client Pod to finish")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "pod", dummyClientPodName,
+				"-n", tlsNS, "-o", "jsonpath={.status.phase}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(BeElementOf("Succeeded", "Failed"))
+		}, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+		By("verifying the dummy client completed a verified TLS handshake using the issued certificate")
+		cmd := exec.Command("kubectl", "logs", dummyClientPodName, "-n", tlsNS)
+		out, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("SSL connection using"),
+			"dummy client did not complete a TLS handshake:\n%s", out)
+		Expect(out).NotTo(ContainSubstring("SSL certificate problem"),
+			"dummy client failed to verify Riak's certificate against the CA:\n%s", out)
 	})
 })
 
