@@ -153,42 +153,15 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	} else {
 		// --- Password-based authentication path ---
-		var password string
-		if user.Spec.PasswordSecret != nil {
-			secret := &corev1.Secret{}
-			secretKey := client.ObjectKey{
-				Namespace: user.Namespace,
-				Name:      user.Spec.PasswordSecret.Name,
+		password, err := r.resolvePassword(ctx, user)
+		if err != nil {
+			log.Error(err, "failed to resolve password")
+			user.Status.Phase = riakv1.UserPhaseFailed
+			user.Status.Error = err.Error()
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
 			}
-			if err := r.Get(ctx, secretKey, secret); err != nil {
-				log.Error(err, "failed to get password secret")
-				user.Status.Phase = riakv1.UserPhaseFailed
-				user.Status.Error = fmt.Sprintf("password secret not found: %v", err)
-				if updateErr := r.Status().Update(ctx, user); updateErr != nil {
-					log.Error(updateErr, "failed to update user status")
-				}
-				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-			}
-
-			key := user.Spec.PasswordSecret.Key
-			if key == "" {
-				key = "password"
-			}
-
-			if pwd, ok := secret.Data[key]; !ok {
-				err := fmt.Errorf("password key not found in secret: %s", key)
-				log.Error(err, "failed to extract password")
-				user.Status.Phase = riakv1.UserPhaseFailed
-				user.Status.Error = err.Error()
-				if updateErr := r.Status().Update(ctx, user); updateErr != nil {
-					log.Error(updateErr, "failed to update user status")
-				}
-				return ctrl.Result{}, nil
-			} else {
-				password = string(pwd)
-			}
-		} else {
-			password = "changeme" // Default password
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 
 		if err := manager.CreateUser(ctx, cluster, user.Spec.Username, password); err != nil {
@@ -220,6 +193,34 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// resolvePassword returns the password for a password-authenticated user. When
+// spec.passwordSecret is not set, the insecure default "changeme" is used.
+func (r *RiakUserReconciler) resolvePassword(ctx context.Context, user *riakv1.RiakUser) (string, error) {
+	if user.Spec.PasswordSecret == nil {
+		return "changeme", nil // Default password
+	}
+
+	secret := &corev1.Secret{}
+	secretKey := client.ObjectKey{
+		Namespace: user.Namespace,
+		Name:      user.Spec.PasswordSecret.Name,
+	}
+	if err := r.Get(ctx, secretKey, secret); err != nil {
+		return "", fmt.Errorf("password secret not found: %w", err)
+	}
+
+	key := user.Spec.PasswordSecret.Key
+	if key == "" {
+		key = "password"
+	}
+
+	pwd, ok := secret.Data[key]
+	if !ok {
+		return "", fmt.Errorf("password key not found in secret: %s", key)
+	}
+	return string(pwd), nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

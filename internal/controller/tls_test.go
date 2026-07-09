@@ -46,14 +46,14 @@ var _ = Describe("TLS certificate builders", func() {
 			Expect(cert.GetName()).To(Equal("mycluster-tls"))
 			Expect(cert.GetNamespace()).To(Equal("mynamespace"))
 
-			spec, _, _ := unstructuredNestedMap(cert.Object, "spec")
+			spec := unstructuredNestedMap(cert.Object, "spec")
 			Expect(spec["secretName"]).To(Equal("mycluster-tls"))
 
-			issuerRef, _, _ := unstructuredNestedMap(spec, "issuerRef")
+			issuerRef := unstructuredNestedMap(spec, "issuerRef")
 			Expect(issuerRef["name"]).To(Equal("my-issuer"))
 			Expect(issuerRef["kind"]).To(Equal("ClusterIssuer"))
 
-			dnsNames, _, _ := unstructuredNestedStringSlice(spec, "dnsNames")
+			dnsNames := unstructuredNestedStringSlice(spec, "dnsNames")
 			Expect(dnsNames).To(ContainElement("*.mycluster-headless.mynamespace.svc.cluster.local"))
 			Expect(dnsNames).To(ContainElement("mycluster-headless.mynamespace.svc.cluster.local"))
 		})
@@ -69,8 +69,8 @@ var _ = Describe("TLS certificate builders", func() {
 				},
 			}
 			cert := buildClusterCertificate(cluster)
-			spec, _, _ := unstructuredNestedMap(cert.Object, "spec")
-			issuerRef, _, _ := unstructuredNestedMap(spec, "issuerRef")
+			spec := unstructuredNestedMap(cert.Object, "spec")
+			issuerRef := unstructuredNestedMap(spec, "issuerRef")
 			Expect(issuerRef["kind"]).To(Equal("Issuer"))
 		})
 	})
@@ -85,7 +85,7 @@ var _ = Describe("TLS certificate builders", func() {
 			Expect(cert.GetName()).To(Equal("my-riak-user-client-tls"))
 			Expect(cert.GetNamespace()).To(Equal("default"))
 
-			spec, _, _ := unstructuredNestedMap(cert.Object, "spec")
+			spec := unstructuredNestedMap(cert.Object, "spec")
 			Expect(spec["commonName"]).To(Equal("riakuser1"))
 			Expect(spec["secretName"]).To(Equal("my-riak-user-client-tls"))
 		})
@@ -96,7 +96,7 @@ var _ = Describe("TLS certificate builders", func() {
 				SecretName: "custom-secret",
 			}
 			cert := buildUserCertificate("u", "ns", "alice", certRef)
-			spec, _, _ := unstructuredNestedMap(cert.Object, "spec")
+			spec := unstructuredNestedMap(cert.Object, "spec")
 			Expect(spec["secretName"]).To(Equal("custom-secret"))
 		})
 
@@ -105,40 +105,34 @@ var _ = Describe("TLS certificate builders", func() {
 				IssuerRef: riakv1.CertIssuerRef{Name: "issuer"},
 			}
 			cert := buildUserCertificate("u", "ns", "alice", certRef)
-			spec, _, _ := unstructuredNestedMap(cert.Object, "spec")
-			issuerRef, _, _ := unstructuredNestedMap(spec, "issuerRef")
+			spec := unstructuredNestedMap(cert.Object, "spec")
+			issuerRef := unstructuredNestedMap(spec, "issuerRef")
 			Expect(issuerRef["kind"]).To(Equal("Issuer"))
 		})
 	})
 })
 
 // unstructuredNestedMap is a test helper that extracts a nested map from an interface{} map.
-func unstructuredNestedMap(obj map[string]interface{}, key string) (map[string]interface{}, bool, error) {
-	v, ok := obj[key]
-	if !ok {
-		return nil, false, nil
-	}
-	m, ok := v.(map[string]interface{})
-	return m, ok, nil
+// It returns nil when the key is absent or holds a different type.
+func unstructuredNestedMap(obj map[string]interface{}, key string) map[string]interface{} {
+	m, _ := obj[key].(map[string]interface{})
+	return m
 }
 
 // unstructuredNestedStringSlice extracts a []string from a nested interface{} slice.
-func unstructuredNestedStringSlice(obj map[string]interface{}, key string) ([]string, bool, error) {
-	v, ok := obj[key]
+// It returns nil when the key is absent or any element is not a string.
+func unstructuredNestedStringSlice(obj map[string]interface{}, key string) []string {
+	raw, ok := obj[key].([]interface{})
 	if !ok {
-		return nil, false, nil
-	}
-	raw, ok := v.([]interface{})
-	if !ok {
-		return nil, false, nil
+		return nil
 	}
 	out := make([]string, 0, len(raw))
 	for _, item := range raw {
 		s, ok := item.(string)
 		if !ok {
-			return nil, false, nil
+			return nil
 		}
 		out = append(out, s)
 	}
-	return out, true, nil
+	return out
 }

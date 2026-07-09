@@ -545,13 +545,13 @@ spec:
 // with the TLS volume/mount/port.
 var _ = Describe("Riak mTLS", Ordered, func() {
 	const (
-		tlsNS          = "default"
-		tlsClusterName = "e2e-tls-cluster"
-		tlsUserName    = "e2e-tls-user"
+		tlsNS            = "default"
+		tlsClusterName   = "e2e-tls-cluster"
+		tlsUserName      = "e2e-tls-user"
 		selfSignedIssuer = "e2e-selfsigned"
-		caSecretName   = "e2e-riak-ca-secret"
-		caCertName     = "e2e-riak-ca"
-		caIssuerName   = "e2e-ca-issuer"
+		caSecretName     = "e2e-riak-ca-secret"
+		caCertName       = "e2e-riak-ca"
+		caIssuerName     = "e2e-ca-issuer"
 	)
 
 	applyManifest := func(yaml string) {

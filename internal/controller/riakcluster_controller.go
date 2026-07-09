@@ -261,7 +261,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 		{Name: "http", ContainerPort: 8098},
 	}
 	if cluster.Spec.TLS != nil && cluster.Spec.TLS.Enabled {
-		containerPorts = append(containerPorts, corev1.ContainerPort{Name: "https", ContainerPort: 8443})
+		containerPorts = append(containerPorts, corev1.ContainerPort{Name: riakTLSPortName, ContainerPort: riakTLSPort})
 	}
 
 	sts := &appsv1.StatefulSet{
@@ -296,8 +296,13 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 							Name:            "riak",
 							Image:           image,
 							ImagePullPolicy: pullPolicy,
-							Ports:           containerPorts,
-							Env:             env,
+							// The image entrypoint ends in `riak console`, which attaches an
+							// Erlang shell to stdin. Without an open stdin the shell reads EOF
+							// and the node exits 0 shortly after boot, crash-looping the pod.
+							Stdin: true,
+							TTY:   true,
+							Ports: containerPorts,
+							Env:   env,
 							Resources: corev1.ResourceRequirements{
 								Requests: resources.Requests,
 								Limits:   resources.Limits,
@@ -388,9 +393,9 @@ func (r *RiakClusterReconciler) reconcileService(ctx context.Context, cluster *r
 		}
 		if tlsEnabled {
 			ports = append(ports, corev1.ServicePort{
-				Name:       "https",
-				Port:       8443,
-				TargetPort: intstr.FromString("https"),
+				Name:       riakTLSPortName,
+				Port:       riakTLSPort,
+				TargetPort: intstr.FromString(riakTLSPortName),
 			})
 		}
 		return ports

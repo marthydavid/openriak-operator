@@ -29,6 +29,8 @@ const (
 	certManagerVersion = "v1"
 	certManagerKind    = "Certificate"
 
+	riakTLSPortName   = "https"
+	riakTLSPort       = int32(8443)
 	riakTLSVolumeName = "riak-tls"
 	riakTLSMountPath  = "/etc/riak/certs"
 	riakTLSCertFile   = "/etc/riak/certs/tls.crt"

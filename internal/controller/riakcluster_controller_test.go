@@ -43,12 +43,12 @@ func reconcileCluster(ctx context.Context, name, namespace string) (*RiakCluster
 }
 
 // reconcileClusterWithImage creates a reconciler with the given DefaultImage and calls Reconcile.
-func reconcileClusterWithImage(ctx context.Context, name, namespace, defaultImage string) (*RiakClusterReconciler, error) {
+func reconcileClusterWithImage(ctx context.Context, name, namespace, defaultImage string) error {
 	r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(), DefaultImage: defaultImage}
 	_, err := r.Reconcile(ctx, reconcile.Request{
 		NamespacedName: types.NamespacedName{Name: name, Namespace: namespace},
 	})
-	return r, err
+	return err
 }
 
 var _ = Describe("RiakCluster Controller", func() {
@@ -262,8 +262,7 @@ var _ = Describe("RiakCluster Controller", func() {
 				Spec:       riakv1.RiakClusterSpec{Size: 1},
 			})).To(Succeed())
 
-			_, err := reconcileClusterWithImage(ctx, clusterName, ns, "custom/riak:test")
-			Expect(err).NotTo(HaveOccurred())
+			Expect(reconcileClusterWithImage(ctx, clusterName, ns, "custom/riak:test")).To(Succeed())
 
 			sts := &appsv1.StatefulSet{}
 			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
@@ -282,6 +281,10 @@ var _ = Describe("RiakCluster Controller", func() {
 			sts := &appsv1.StatefulSet{}
 			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal(defaultRiakImage))
+
+			By("keeping stdin open so riak console does not exit on EOF")
+			Expect(sts.Spec.Template.Spec.Containers[0].Stdin).To(BeTrue())
+			Expect(sts.Spec.Template.Spec.Containers[0].TTY).To(BeTrue())
 		})
 
 		It("spec.image takes precedence over DefaultImage", func() {
@@ -290,8 +293,7 @@ var _ = Describe("RiakCluster Controller", func() {
 				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "explicit/riak:spec"},
 			})).To(Succeed())
 
-			_, err := reconcileClusterWithImage(ctx, clusterName, ns, "custom/riak:flag")
-			Expect(err).NotTo(HaveOccurred())
+			Expect(reconcileClusterWithImage(ctx, clusterName, ns, "custom/riak:flag")).To(Succeed())
 
 			sts := &appsv1.StatefulSet{}
 			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
@@ -361,7 +363,7 @@ var _ = Describe("RiakCluster Controller", func() {
 			By("checking HTTPS container port 8443 is added")
 			var foundHTTPSPort bool
 			for _, p := range container.Ports {
-				if p.Name == "https" && p.ContainerPort == 8443 {
+				if p.Name == riakTLSPortName && p.ContainerPort == riakTLSPort {
 					foundHTTPSPort = true
 				}
 			}
@@ -389,7 +391,7 @@ var _ = Describe("RiakCluster Controller", func() {
 				Expect(e.Name).NotTo(HavePrefix("RIAK_CONFIG_SSL__"))
 			}
 			for _, p := range container.Ports {
-				Expect(p.Name).NotTo(Equal("https"))
+				Expect(p.Name).NotTo(Equal(riakTLSPortName))
 			}
 		})
 	})
@@ -498,7 +500,7 @@ var _ = Describe("RiakCluster Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName + "-headless", Namespace: ns}, headless)).To(Succeed())
 			var foundHTTPS bool
 			for _, p := range headless.Spec.Ports {
-				if p.Name == "https" && p.Port == 8443 {
+				if p.Name == riakTLSPortName && p.Port == riakTLSPort {
 					foundHTTPS = true
 				}
 			}
@@ -508,7 +510,7 @@ var _ = Describe("RiakCluster Controller", func() {
 			Expect(k8sClient.Get(ctx, nn, clientSvc)).To(Succeed())
 			foundHTTPS = false
 			for _, p := range clientSvc.Spec.Ports {
-				if p.Name == "https" && p.Port == 8443 {
+				if p.Name == riakTLSPortName && p.Port == riakTLSPort {
 					foundHTTPS = true
 				}
 			}
