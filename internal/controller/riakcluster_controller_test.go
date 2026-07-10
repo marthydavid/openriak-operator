@@ -361,6 +361,8 @@ var _ = Describe("RiakCluster Controller", func() {
 			Expect(envMap["RIAK_CONFIG_SSL__KEYFILE"]).To(Equal(riakTLSKeyFile))
 			Expect(envMap["RIAK_CONFIG_SSL__CACERTFILE"]).To(Equal(riakTLSCACertFile))
 			Expect(envMap["RIAK_CONFIG_LISTENER__HTTPS__INTERNAL"]).To(Equal("0.0.0.0:8443"))
+			Expect(envMap["RIAK_CONFIG_CHECK_CRL"]).To(Equal("off"),
+				"cert-manager certs have no CRL distribution point; Riak's CRL check must be off")
 
 			By("checking HTTPS container port 8443 is added")
 			var foundHTTPSPort bool
