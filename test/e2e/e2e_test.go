@@ -74,42 +74,14 @@ const metricsRoleBindingName = "agents-riak-operator-kubernetes-lifecycle-metric
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// installing CRDs, and deploying the controller.
-	BeforeAll(func() {
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+	// CRD installation and operator deployment live in BeforeSuite/AfterSuite
+	// (e2e_suite_test.go): other top-level Describes (Riak mTLS) need the operator
+	// too, and Ginkgo randomizes top-level container order, so per-container
+	// setup/teardown would leave the other containers without CRDs.
 
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
-
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
-	})
-
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
-		_, _ = utils.Run(cmd)
-
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
-
-		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
 		_, _ = utils.Run(cmd)
 	})
 
@@ -705,7 +677,7 @@ spec:
 		}, 2*time.Minute, 2*time.Second).Should(Succeed())
 	})
 
-	It("operator creates a cert-manager Certificate for the RiakUser (dummy mTLS client cert) and it becomes Ready", func() {
+	It("operator creates a cert-manager client Certificate for the RiakUser and it becomes Ready", func() {
 		By("verifying the self-signed-issuer-backed client Certificate is issued")
 		Eventually(func(g Gomega) {
 			cmd := exec.Command("kubectl", "get", "certificate", tlsUserName+"-client-tls", "-n", tlsNS,
@@ -800,7 +772,9 @@ spec:
       image: curlimages/curl:7.78.0
       command: ["/bin/sh", "-c"]
       args:
-        - "curl -v --cacert /certs/ca.crt --cert /certs/tls.crt --key /certs/tls.key https://%s.%s.svc.cluster.local:8443/ping"
+        - >-
+          curl -v --cacert /certs/ca.crt --cert /certs/tls.crt
+          --key /certs/tls.key https://%s.%s.svc.cluster.local:8443/ping
       volumeMounts:
         - name: client-tls
           mountPath: /certs

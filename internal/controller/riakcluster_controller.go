@@ -225,6 +225,11 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 			corev1.EnvVar{Name: "RIAK_CONFIG_SSL__KEYFILE", Value: riakTLSKeyFile},
 			corev1.EnvVar{Name: "RIAK_CONFIG_SSL__CACERTFILE", Value: riakTLSCACertFile},
 			corev1.EnvVar{Name: "RIAK_CONFIG_LISTENER__HTTPS__INTERNAL", Value: "0.0.0.0:8443"},
+			// check_crl defaults to on, and Riak's CRL check crashes the TLS handshake
+			// ({case_clause,{no_crl,...}} in ssl_handshake:certify) for any client cert
+			// without a CRL distribution point — which includes every cert-manager-issued
+			// certificate. Certificate-based auth over protobuf is unusable without this.
+			corev1.EnvVar{Name: "RIAK_CONFIG_CHECK_CRL", Value: "off"},
 		)
 		extraVolumes = []corev1.Volume{
 			{
