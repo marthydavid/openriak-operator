@@ -472,10 +472,16 @@ spec:
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to print user grants")
 				// Verify that grants include read and write permissions
-				g.Expect(out).To(ContainSubstring("riak_kv.get") | ContainSubstring("read"),
-					"User e2euser missing read grant")
-				g.Expect(out).To(ContainSubstring("riak_kv.put") | ContainSubstring("write"),
-					"User e2euser missing write grant")
+				// Check for either riak_kv.get (newer format) or read (legacy format)
+				g.Expect(out).To(Or(
+					ContainSubstring("riak_kv.get"),
+					ContainSubstring("read"),
+				))
+				// Check for either riak_kv.put (newer format) or write (legacy format)
+				g.Expect(out).To(Or(
+					ContainSubstring("riak_kv.put"),
+					ContainSubstring("write"),
+				))
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
