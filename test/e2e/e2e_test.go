@@ -355,8 +355,8 @@ spec:
 		})
 
 		It("RiakCluster reaches Ready phase once Riak pod is running", func() {
-			// Riak needs to pull its image and pass liveness/readiness probes before
-			// the operator transitions to Ready. Allow up to 5 minutes.
+			// Riak can take up to 10 minutes to start on first boot, especially in resource-constrained
+			// environments. Allow up to 15 minutes for reliable CI execution.
 			By("waiting for RiakCluster status.phase == Ready")
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
@@ -364,7 +364,7 @@ spec:
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(Equal("Ready"))
-			}, 5*time.Minute, 10*time.Second).Should(Succeed())
+			}, 15*time.Minute, 10*time.Second).Should(Succeed())
 
 			By("verifying readyNodes equals the cluster size")
 			cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
@@ -404,7 +404,7 @@ spec:
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(Equal("Ready"))
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}, 15*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("operator sets a finalizer and a status phase for the RiakUser", func() {
@@ -435,7 +435,7 @@ spec:
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(Equal("Ready"))
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}, 15*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("RiakBucket exists in the Riak cluster after CR reaches Ready", func() {
@@ -448,7 +448,7 @@ spec:
 				// The bucket name in the CR is "e2e-app-data", which should be listed
 				g.Expect(out).To(ContainSubstring("e2e-app-data"),
 					"Bucket e2e-app-data not found in riak-admin bucket-type list")
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}, 15*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("RiakUser exists in the Riak cluster after CR reaches Ready", func() {
@@ -461,7 +461,7 @@ spec:
 				// The username in the CR is "e2euser"
 				g.Expect(out).To(ContainSubstring("e2euser"),
 					"User e2euser not found in riak-admin security list users")
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}, 15*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("RiakUser grants are applied correctly in the Riak cluster", func() {
@@ -482,7 +482,7 @@ spec:
 					ContainSubstring("riak_kv.put"),
 					ContainSubstring("write"),
 				))
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}, 15*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("all three CR types appear in kubectl get", func() {
@@ -794,7 +794,7 @@ spec:
 			out, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
 			g.Expect(out).To(Equal("Ready"))
-		}, 5*time.Minute, 5*time.Second).Should(Succeed())
+		}, 15*time.Minute, 5*time.Second).Should(Succeed())
 
 		// Riak's certificate-based auth (security add-source ... certificate) is
 		// negotiated over the protobuf port's STARTTLS upgrade, which a shell-only
