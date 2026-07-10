@@ -147,7 +147,7 @@ func TestGrantUserPermission_withMember(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	joined := strings.Join((*calls)[0].args, " ")
-	if !strings.Contains(joined, "security grant read") {
+	if !strings.Contains(joined, "security grant riak_kv.get on any to alice") {
 		t.Errorf("unexpected call args: %s", joined)
 	}
 }

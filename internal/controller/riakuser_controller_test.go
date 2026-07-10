@@ -444,6 +444,47 @@ var _ = Describe("RiakUser Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, u)).To(Succeed())
 			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseReady))
 		})
+
+		It("sets phase to Failed and requeues when a grant fails", func() {
+			const userName = "user-grant-failure"
+			readyCluster()
+			defer cleanupReadyCluster()
+
+			grantFailRunner := func(_ context.Context, _ string, args ...string) (string, error) {
+				if strings.Contains(strings.Join(args, " "), "security grant") {
+					return "", fmt.Errorf("{error,{unknown_permission,\"read\"}}")
+				}
+				return "", nil
+			}
+
+			Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: clusterRefName,
+					Username:    "heidi",
+					Grants:      []riakv1.Grant{{Resource: "any", Permission: "read"}},
+				},
+			})).To(Succeed())
+			defer cleanupUserMock(userName)
+
+			r := &RiakUserReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), grantFailRunner),
+			}
+			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: userName, Namespace: ns}}
+			_, err := r.Reconcile(ctx, req) // adds finalizer
+			Expect(err).NotTo(HaveOccurred())
+			res, err := r.Reconcile(ctx, req) // business logic
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+
+			u := &riakv1.RiakUser{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, u)).To(Succeed())
+			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
+			Expect(u.Status.Error).To(ContainSubstring("failed to grant"))
+			Expect(u.Status.Error).To(ContainSubstring("unknown_permission"))
+		})
 	})
 
 	Context("deletion", func() {

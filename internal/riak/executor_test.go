@@ -383,7 +383,7 @@ func TestGrantPermission_nosBucket(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	joined := strings.Join((*calls)[0].args, " ")
-	if !strings.Contains(joined, "security grant read on any to alice") {
+	if !strings.Contains(joined, "security grant riak_kv.get on any to alice") {
 		t.Errorf("unexpected args: %s", joined)
 	}
 }
@@ -395,9 +395,57 @@ func TestGrantPermission_withBucket(t *testing.T) {
 	if err := e.GrantPermission(context.Background(), "ns", "pod", "riak", "alice", "bucket", "write", "mybucket"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// "on mybucket", not "on bucket mybucket": the grant targets the bucket
+	// type, and Riak would silently accept a grant on a type named "bucket".
 	joined := strings.Join((*calls)[0].args, " ")
-	if !strings.Contains(joined, "mybucket") {
-		t.Errorf("expected bucket name in args: %s", joined)
+	if !strings.Contains(joined, "security grant riak_kv.put on mybucket to alice") {
+		t.Errorf("unexpected args: %s", joined)
+	}
+}
+
+func TestGrantPermission_mapsEnumToRiakPermissions(t *testing.T) {
+	for enum, want := range map[string]string{
+		"list": "riak_kv.list_keys,riak_kv.list_buckets",
+		"admin": "riak_kv.get,riak_kv.put,riak_kv.delete,riak_kv.list_keys," +
+			"riak_kv.list_buckets,riak_kv.mapreduce,riak_kv.index," +
+			"riak_core.get_bucket,riak_core.set_bucket",
+	} {
+		runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
+		e := newTestExecutor(runner)
+
+		if err := e.GrantPermission(context.Background(), "ns", "pod", "riak", "alice", "any", enum, ""); err != nil {
+			t.Fatalf("%s: unexpected error: %v", enum, err)
+		}
+		joined := strings.Join((*calls)[0].args, " ")
+		if !strings.Contains(joined, "security grant "+want+" on any to alice") {
+			t.Errorf("%s: unexpected args: %s", enum, joined)
+		}
+	}
+}
+
+func TestGrantPermission_unknownPermission(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
+	e := newTestExecutor(runner)
+
+	err := e.GrantPermission(context.Background(), "ns", "pod", "riak", "alice", "any", "superuser", "")
+	if err == nil || !strings.Contains(err.Error(), "unknown permission") {
+		t.Fatalf("expected unknown permission error, got %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected no riak-admin call, got %d", len(*calls))
+	}
+}
+
+func TestGrantPermission_bucketResourceRequiresName(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
+	e := newTestExecutor(runner)
+
+	err := e.GrantPermission(context.Background(), "ns", "pod", "riak", "alice", "bucket", "read", "")
+	if err == nil || !strings.Contains(err.Error(), "bucket name") {
+		t.Fatalf("expected bucket name error, got %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected no riak-admin call, got %d", len(*calls))
 	}
 }
 

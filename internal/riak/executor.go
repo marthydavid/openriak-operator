@@ -168,13 +168,36 @@ func (e *Executor) AddSecuritySource(ctx context.Context, namespace, podName, co
 	return err
 }
 
+// riakPermissions maps the RiakUser CRD permission enum to Riak security
+// permission sets. Riak's CLI only accepts fully-qualified <app>.<perm> names
+// ({error,{unknown_permission,...}} otherwise); verified against Riak 3.2.6.
+var riakPermissions = map[string]string{
+	"read":   "riak_kv.get",
+	"write":  "riak_kv.put",
+	"delete": "riak_kv.delete",
+	"list":   "riak_kv.list_keys,riak_kv.list_buckets",
+	"admin": "riak_kv.get,riak_kv.put,riak_kv.delete,riak_kv.list_keys," +
+		"riak_kv.list_buckets,riak_kv.mapreduce,riak_kv.index," +
+		"riak_core.get_bucket,riak_core.set_bucket",
+}
+
 // GrantPermission grants a permission to a user on a resource.
+// permission is a RiakUser CRD enum value (read, write, delete, list, admin).
+// resource is "any", or "bucket" with bucket naming the Riak bucket type
+// created by a RiakBucket CR — the grant then covers every bucket of that type.
 func (e *Executor) GrantPermission(ctx context.Context, namespace, podName, containerName, username, resource, permission, bucket string) error {
-	args := []string{"security", "grant", permission, "on", resource}
-	if bucket != "" {
-		args = append(args, bucket)
+	perms, ok := riakPermissions[permission]
+	if !ok {
+		return fmt.Errorf("unknown permission %q", permission)
 	}
-	args = append(args, "to", username)
-	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
+	target := "any"
+	if resource == "bucket" {
+		if bucket == "" {
+			return fmt.Errorf("resource %q requires a bucket name", resource)
+		}
+		target = bucket
+	}
+	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName,
+		"security", "grant", perms, "on", target, "to", username)
 	return err
 }
