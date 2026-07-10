@@ -215,7 +215,7 @@ var _ = Describe("Manager", Ordered, func() {
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 	})
 
-	// ── Riak CR lifecycle ─────────────────────────────────────────────────────────
+	// ── Riak CR lifecycle ───────────────────────────────────────────────────────
 	// Create a RiakCluster, a RiakBucket, and a RiakUser, verify the operator
 	// reconciles all three (finalizers, child resources, status phases), then
 	// delete them and confirm they are fully removed.
@@ -435,6 +435,47 @@ spec:
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(Equal("Ready"))
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("RiakBucket exists in the Riak cluster after CR reaches Ready", func() {
+			By("verifying the bucket exists via riak-admin bucket-type list")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
+					"riak-admin", "bucket-type", "list")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Failed to list bucket types")
+				// The bucket name in the CR is "e2e-app-data", which should be listed
+				g.Expect(out).To(ContainSubstring("e2e-app-data"),
+					"Bucket e2e-app-data not found in riak-admin bucket-type list")
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("RiakUser exists in the Riak cluster after CR reaches Ready", func() {
+			By("verifying the user exists via riak-admin security listing")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
+					"riak-admin", "security", "list", "users")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Failed to list users")
+				// The username in the CR is "e2euser"
+				g.Expect(out).To(ContainSubstring("e2euser"),
+					"User e2euser not found in riak-admin security list users")
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("RiakUser grants are applied correctly in the Riak cluster", func() {
+			By("verifying the user has read/write grants via riak-admin security listing")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
+					"riak-admin", "security", "print-grants", "e2euser")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Failed to print user grants")
+				// Verify that grants include read and write permissions
+				g.Expect(out).To(ContainSubstring("riak_kv.get") | ContainSubstring("read"),
+					"User e2euser missing read grant")
+				g.Expect(out).To(ContainSubstring("riak_kv.put") | ContainSubstring("write"),
+					"User e2euser missing write grant")
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
