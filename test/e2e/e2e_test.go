@@ -537,6 +537,8 @@ var _ = Describe("Riak mTLS", Ordered, func() {
 		caCertName         = "e2e-riak-ca"
 		caIssuerName       = "e2e-ca-issuer"
 		dummyClientPodName = "e2e-tls-dummy-client"
+		pbClientPodName    = "e2e-pb-cert-client"
+		pbScriptConfigMap  = "e2e-pb-cert-script"
 	)
 
 	// clientCertSecretName is the Secret cert-manager populates with the dummy
@@ -641,6 +643,11 @@ spec:
     issuerRef:
       name: %s
       kind: Issuer
+  grants:
+    - resource: any
+      permission: read
+    - resource: any
+      permission: write
 `, tlsUserName, tlsNS, tlsClusterName, caIssuerName))
 	})
 
@@ -653,6 +660,8 @@ spec:
 
 		By("removing mTLS e2e resources (best-effort)")
 		for _, args := range [][]string{
+			{"kubectl", "delete", "pod", pbClientPodName, "-n", tlsNS, "--ignore-not-found"},
+			{"kubectl", "delete", "configmap", pbScriptConfigMap, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "pod", dummyClientPodName, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "riakuser", tlsUserName, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "riakcluster", tlsClusterName, "-n", tlsNS, "--ignore-not-found"},
@@ -802,6 +811,85 @@ spec:
 			"dummy client did not complete a TLS handshake:\n%s", out)
 		Expect(out).NotTo(ContainSubstring("SSL certificate problem"),
 			"dummy client failed to verify Riak's certificate against the CA:\n%s", out)
+	})
+
+	It("a client reads and writes over protobuf with certificate authentication", func() {
+		// This is the real thing the dummy-client handshake above can't do:
+		// speak Riak's protobuf STARTTLS, authenticate via the client cert
+		// (Riak matches the CN against the username), and exercise the
+		// granted permissions with a put/get roundtrip. Ready phase now
+		// implies grants were applied, so waiting for it also asserts the
+		// grant path against a live Riak.
+		By("waiting for the certificate RiakUser to reach Ready phase")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "riakuser", tlsUserName,
+				"-n", tlsNS, "-o", "jsonpath={.status.phase}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("Ready"))
+		}, 5*time.Minute, 5*time.Second).Should(Succeed())
+
+		By("creating the protobuf cert-auth check script ConfigMap")
+		cmd := exec.Command("kubectl", "create", "configmap", pbScriptConfigMap,
+			"-n", tlsNS, "--from-file=check.py=test/e2e/testdata/pb_cert_auth_check.py")
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("creating the protobuf cert-auth client Pod")
+		applyManifest(fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  restartPolicy: Never
+  containers:
+    - name: pb-cert-client
+      image: python:3.12-alpine
+      command: ["python3", "/script/check.py"]
+      env:
+        - name: RIAK_HOST
+          value: %s.%s.svc.cluster.local
+        - name: RIAK_USER
+          value: e2etlsuser
+      volumeMounts:
+        - name: client-tls
+          mountPath: /certs
+          readOnly: true
+        - name: script
+          mountPath: /script
+          readOnly: true
+  volumes:
+    - name: client-tls
+      secret:
+        secretName: %s
+    - name: script
+      configMap:
+        name: %s
+`, pbClientPodName, tlsNS, tlsClusterName, tlsNS, clientCertSecretName, pbScriptConfigMap))
+
+		By("waiting for the protobuf client Pod to finish")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "pod", pbClientPodName,
+				"-n", tlsNS, "-o", "jsonpath={.status.phase}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(BeElementOf("Succeeded", "Failed"))
+		}, 5*time.Minute, 5*time.Second).Should(Succeed())
+
+		By("verifying certificate auth, put, and get all succeeded")
+		logsCmd := exec.Command("kubectl", "logs", pbClientPodName, "-n", tlsNS)
+		out, err := utils.Run(logsCmd)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(ContainSubstring("ALL CHECKS PASSED"),
+			"protobuf cert-auth client failed:\n%s", out)
+
+		phaseCmd := exec.Command("kubectl", "get", "pod", pbClientPodName,
+			"-n", tlsNS, "-o", "jsonpath={.status.phase}")
+		phase, err := utils.Run(phaseCmd)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(phase).To(Equal("Succeeded"))
 	})
 })
 
