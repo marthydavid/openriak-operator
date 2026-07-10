@@ -24,7 +24,10 @@ RUN dnf install -y \
 
 # Ensure directories are writable by the riak user created by the RPM.
 # The RPM sets these up, but explicit chown guards against image layer ordering issues.
-RUN chown -R riak:riak /etc/riak /var/lib/riak /var/log/riak
+# /var/run/riak is the hardcoded PID_DIR in /usr/sbin/riak; without it every riak
+# CLI invocation (ping, stop, admin) warns about a failed mkdir.
+RUN mkdir -p /var/run/riak \
+    && chown -R riak:riak /etc/riak /var/lib/riak /var/log/riak /var/run/riak
 
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh

@@ -74,8 +74,10 @@ ring_size = ${RIAK_RING_SIZE}
 ## Storage
 storage_backend = ${RIAK_STORAGE_BACKEND}
 
-## Logging — send to console so Kubernetes captures it via kubectl logs.
-log.console = console
+## Logging — without a TTY Riak writes "console" logs to the log dir anyway,
+## so log to file explicitly; the entrypoint tails it to stdout for
+## kubectl logs.
+log.console = file
 log.console.level = info
 log.crash = on
 log.crash.size = 10MB
@@ -96,7 +98,29 @@ while IFS='=' read -r key value; do
 done < <(env | grep '^RIAK_CONFIG_') >> /etc/riak/riak.conf
 
 # ---------------------------------------------------------------------------
-# Start Riak in the foreground so the container exits when Riak stops.
-# 'riak console' runs the Erlang VM in the foreground (no daemon fork).
+# Start Riak with 'riak foreground': the VM runs without an interactive shell
+# (-noinput), so it does not shut down when stdin closes — no stdin/tty needed
+# on the container. The BEAM ignores SIGTERM, so trap it and call 'riak stop'
+# for a graceful shutdown within the pod's termination grace period.
+# Riak's console logs only reach a real TTY, so tail the console.log file to
+# stdout for kubectl logs; tail exits with the BEAM via --pid.
 # ---------------------------------------------------------------------------
-exec /usr/sbin/riak console
+/usr/sbin/riak foreground &
+beam=$!
+
+graceful_stop() {
+    /usr/sbin/riak stop >/dev/null 2>&1 || kill "${beam}" 2>/dev/null
+}
+trap graceful_stop TERM INT
+
+touch /var/log/riak/console.log
+tail --pid="${beam}" -n +1 -F /var/log/riak/console.log &
+
+rc=0
+wait "${beam}" || rc=$?
+# If wait was interrupted by the signal trap, wait again for the real exit.
+if [ "${rc}" -gt 128 ] && kill -0 "${beam}" 2>/dev/null; then
+    rc=0
+    wait "${beam}" || rc=$?
+fi
+exit "${rc}"
