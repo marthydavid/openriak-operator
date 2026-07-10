@@ -20,6 +20,20 @@
 set -eo pipefail
 
 # ---------------------------------------------------------------------------
+# Prepare runtime directories
+# ---------------------------------------------------------------------------
+# Riak needs /var/run/riak for runtime state. The riak user created by the
+# RPM may not have write access to /var/run on some container runtimes.
+# Create the directory and ensure it's owned by the riak user.
+if [[ ! -d /var/run/riak ]]; then
+    mkdir -p /var/run/riak
+fi
+chown -R riak:riak /var/run/riak
+
+# Ensure all Riak directories are writable by the riak user
+chown -R riak:riak /etc/riak /var/lib/riak /var/log/riak
+
+# ---------------------------------------------------------------------------
 # Node identity
 # Prefer DNS-based names (stable across pod restarts) when the StatefulSet
 # headless service name can be inferred. Fall back to POD_IP if namespace or
