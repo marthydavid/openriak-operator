@@ -316,13 +316,16 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 								Limits:   resources.Limits,
 							},
 							VolumeMounts: volumeMounts,
+							// Probe the protobuf listener with a TCP check rather than
+							// `riak ping` / `riak-admin status`: those each spawn a full
+							// temporary Erlang VM per invocation, so running them every few
+							// seconds is very CPU/memory heavy (enough to OOM small nodes).
+							// A TCP connect to 8087 succeeds once Riak is accepting client
+							// connections, which is the signal we actually want.
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{
-										// `ping` is a subcommand of `riak`, not `riak-admin`
-										// (`riak-admin ping` exits non-zero with a usage error,
-										// which fails the probe and crash-loops the pod).
-										Command: []string{"riak", "ping"},
+									TCPSocket: &corev1.TCPSocketAction{
+										Port: intstr.FromString("protobuf"),
 									},
 								},
 								InitialDelaySeconds: 30,
@@ -332,8 +335,8 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 							},
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{
-										Command: []string{"riak-admin", "status"},
+									TCPSocket: &corev1.TCPSocketAction{
+										Port: intstr.FromString("protobuf"),
 									},
 								},
 								InitialDelaySeconds: 20,

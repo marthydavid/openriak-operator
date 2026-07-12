@@ -251,6 +251,8 @@ spec:
   image: ghcr.io/marthydavid/riak:3.2.6
   storageClassName: standard
   storageSize: 1Gi
+  riakConfig:
+    ring_size: "8"
 `, clusterName, riakNS))
 
 			By("creating the password Secret for the RiakUser")
@@ -516,6 +518,8 @@ spec:
   size: 1
   storageClassName: standard
   storageSize: 1Gi
+  riakConfig:
+    ring_size: "8"
 `, defaultImageCluster, riakNS))
 
 			By("verifying the StatefulSet uses the operator default image")
@@ -660,6 +664,8 @@ spec:
   image: ghcr.io/marthydavid/riak:3.2.6
   storageClassName: standard
   storageSize: 1Gi
+  riakConfig:
+    ring_size: "8"
   tls:
     enabled: true
     certManager:
@@ -862,6 +868,8 @@ spec:
   image: ghcr.io/marthydavid/riak:3.2.6
   storageClassName: standard
   storageSize: 1Gi
+  riakConfig:
+    ring_size: "8"
   tls:
     enabled: true
     certManager:
