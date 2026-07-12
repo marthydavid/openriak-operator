@@ -177,10 +177,19 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// Grant permissions (applies to both auth paths)
+	// Grant permissions (applies to both auth paths). A failed grant means the
+	// user would silently lack the access the spec requested, so surface it as a
+	// reconcile failure rather than reporting Ready.
 	for _, grant := range user.Spec.Grants {
 		if err := manager.GrantUserPermission(ctx, cluster, user.Spec.Username, grant.Resource, grant.Permission, grant.BucketName); err != nil {
 			log.Error(err, "failed to grant permission", "user", user.Spec.Username, "permission", grant.Permission)
+			user.Status.Phase = riakv1.UserPhaseFailed
+			user.Status.Error = fmt.Sprintf("failed to grant %s on %s: %v", grant.Permission, grant.Resource, err)
+			user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 		}
 	}
 

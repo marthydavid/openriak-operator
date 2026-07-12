@@ -168,12 +168,44 @@ func (e *Executor) AddSecuritySource(ctx context.Context, namespace, podName, co
 	return err
 }
 
-// GrantPermission grants a permission to a user on a resource.
-func (e *Executor) GrantPermission(ctx context.Context, namespace, podName, containerName, username, resource, permission, bucket string) error {
-	args := []string{"security", "grant", permission, "on", resource}
-	if bucket != "" {
-		args = append(args, bucket)
+// riakKVPermissions maps the CRD's friendly permission names to the Riak KV
+// application permissions that `riak-admin security grant` expects. Riak does
+// not understand the short forms (read/write/…); it requires fully qualified
+// names such as riak_kv.get. Unknown values pass through unchanged.
+func riakKVPermissions(permission string) string {
+	switch permission {
+	case "read":
+		return "riak_kv.get"
+	case "write":
+		return "riak_kv.put"
+	case "delete":
+		return "riak_kv.delete"
+	case "list":
+		return "riak_kv.list_keys,riak_kv.list_buckets"
+	case "admin":
+		return "riak_kv.get,riak_kv.put,riak_kv.delete,riak_kv.list_keys,riak_kv.list_buckets"
+	default:
+		return permission
 	}
+}
+
+// GrantPermission grants a permission to a user on a resource.
+//
+// Riak's grant syntax is:
+//
+//	security grant <perms> on any to <user>              # default bucket type
+//	security grant <perms> on <type> [bucket] to <user>  # a bucket type / bucket
+//
+// The CRD models resource as "any" or "bucket"; for "bucket" the bucket field
+// carries the grant target — either "<type>" or "<type> <bucket>".
+func (e *Executor) GrantPermission(ctx context.Context, namespace, podName, containerName, username, resource, permission, bucket string) error {
+	target := []string{"any"}
+	if resource == "bucket" && bucket != "" {
+		target = strings.Fields(bucket)
+	}
+
+	args := []string{"security", "grant", riakKVPermissions(permission), "on"}
+	args = append(args, target...)
 	args = append(args, "to", username)
 	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
 	return err

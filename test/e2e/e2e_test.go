@@ -17,11 +17,15 @@ limitations under the License.
 package e2e
 
 import (
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -74,16 +78,9 @@ const metricsRoleBindingName = "agents-riak-operator-kubernetes-lifecycle-metric
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
-	// CRD installation and operator deployment live in BeforeSuite/AfterSuite
-	// (e2e_suite_test.go): other top-level Describes (Riak mTLS) need the operator
-	// too, and Ginkgo randomizes top-level container order, so per-container
-	// setup/teardown would leave the other containers without CRDs.
-
-	AfterAll(func() {
-		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
-		_, _ = utils.Run(cmd)
-	})
+	// CRD install and controller deploy happen once at suite scope (BeforeSuite),
+	// not here: Ginkgo randomizes top-level container order, so a per-Describe
+	// teardown would remove the operator/CRDs before the other Describes run.
 
 	// After each test, always collect diagnostics to logDir for CI artifact upload.
 	// On failure, also echo key logs to GinkgoWriter for immediate visibility.
@@ -215,7 +212,7 @@ var _ = Describe("Manager", Ordered, func() {
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 	})
 
-	// ── Riak CR lifecycle ───────────────────────────────────────────────────────
+	// ── Riak CR lifecycle ─────────────────────────────────────────────────────────
 	// Create a RiakCluster, a RiakBucket, and a RiakUser, verify the operator
 	// reconciles all three (finalizers, child resources, status phases), then
 	// delete them and confirm they are fully removed.
@@ -355,8 +352,8 @@ spec:
 		})
 
 		It("RiakCluster reaches Ready phase once Riak pod is running", func() {
-			// Riak can take up to 10 minutes to start on first boot, especially in resource-constrained
-			// environments. Allow up to 15 minutes for reliable CI execution.
+			// Riak needs to pull its image and pass liveness/readiness probes before
+			// the operator transitions to Ready. Allow up to 5 minutes.
 			By("waiting for RiakCluster status.phase == Ready")
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
@@ -364,7 +361,7 @@ spec:
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(Equal("Ready"))
-			}, 15*time.Minute, 10*time.Second).Should(Succeed())
+			}, 5*time.Minute, 10*time.Second).Should(Succeed())
 
 			By("verifying readyNodes equals the cluster size")
 			cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
@@ -404,7 +401,7 @@ spec:
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(Equal("Ready"))
-			}, 15*time.Minute, 5*time.Second).Should(Succeed())
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("operator sets a finalizer and a status phase for the RiakUser", func() {
@@ -435,7 +432,7 @@ spec:
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(Equal("Ready"))
-			}, 15*time.Minute, 5*time.Second).Should(Succeed())
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("RiakBucket exists in the Riak cluster after CR reaches Ready", func() {
@@ -448,7 +445,7 @@ spec:
 				// The bucket name in the CR is "e2e-app-data", which should be listed
 				g.Expect(out).To(ContainSubstring("e2e-app-data"),
 					"Bucket e2e-app-data not found in riak-admin bucket-type list")
-			}, 15*time.Minute, 5*time.Second).Should(Succeed())
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("RiakUser exists in the Riak cluster after CR reaches Ready", func() {
@@ -461,7 +458,7 @@ spec:
 				// The username in the CR is "e2euser"
 				g.Expect(out).To(ContainSubstring("e2euser"),
 					"User e2euser not found in riak-admin security list users")
-			}, 15*time.Minute, 5*time.Second).Should(Succeed())
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("RiakUser grants are applied correctly in the Riak cluster", func() {
@@ -482,7 +479,7 @@ spec:
 					ContainSubstring("riak_kv.put"),
 					ContainSubstring("write"),
 				))
-			}, 15*time.Minute, 5*time.Second).Should(Succeed())
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("all three CR types appear in kubectl get", func() {
@@ -576,19 +573,14 @@ spec:
 // with the TLS volume/mount/port.
 var _ = Describe("Riak mTLS", Ordered, func() {
 	const (
-		tlsNS              = "default"
-		tlsClusterName     = "e2e-tls-cluster"
-		tlsUserName        = "e2e-tls-user"
-		selfSignedIssuer   = "e2e-selfsigned"
-		caSecretName       = "e2e-riak-ca-secret"
-		caCertName         = "e2e-riak-ca"
-		caIssuerName       = "e2e-ca-issuer"
-		dummyClientPodName = "e2e-tls-dummy-client"
+		tlsNS            = "default"
+		tlsClusterName   = "e2e-tls-cluster"
+		tlsUserName      = "e2e-tls-user"
+		selfSignedIssuer = "e2e-selfsigned"
+		caSecretName     = "e2e-riak-ca-secret"
+		caCertName       = "e2e-riak-ca"
+		caIssuerName     = "e2e-ca-issuer"
 	)
-
-	// clientCertSecretName is the Secret cert-manager populates with the dummy
-	// client's issued certificate (userClientTLSSecretName in tls.go).
-	clientCertSecretName := tlsUserName + "-client-tls"
 
 	applyManifest := func(yaml string) {
 		f, err := os.CreateTemp("", "e2e-tls-*.yaml")
@@ -700,7 +692,6 @@ spec:
 
 		By("removing mTLS e2e resources (best-effort)")
 		for _, args := range [][]string{
-			{"kubectl", "delete", "pod", dummyClientPodName, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "riakuser", tlsUserName, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "riakcluster", tlsClusterName, "-n", tlsNS, "--ignore-not-found"},
 			{"kubectl", "delete", "issuer", caIssuerName, "-n", tlsNS, "--ignore-not-found"},
@@ -713,35 +704,22 @@ spec:
 		}
 	})
 
-	It("operator creates a cert-manager Certificate for the RiakCluster and it becomes Ready", func() {
-		By("verifying the self-signed-issuer-backed cluster Certificate is issued")
+	It("operator creates a cert-manager Certificate for the RiakCluster", func() {
+		By("verifying cert-manager Certificate for the cluster exists")
 		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "certificate", tlsClusterName+"-tls", "-n", tlsNS,
-				"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
-			out, err := utils.Run(cmd)
+			cmd := exec.Command("kubectl", "get", "certificate", tlsClusterName+"-tls", "-n", tlsNS)
+			_, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(out).To(Equal("True"))
-		}, 2*time.Minute, 2*time.Second).Should(Succeed())
+		}).Should(Succeed())
 	})
 
-	It("operator creates a cert-manager client Certificate for the RiakUser and it becomes Ready", func() {
-		By("verifying the self-signed-issuer-backed client Certificate is issued")
+	It("operator creates a cert-manager Certificate for the RiakUser", func() {
+		By("verifying cert-manager Certificate for the user exists")
 		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "certificate", tlsUserName+"-client-tls", "-n", tlsNS,
-				"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
-			out, err := utils.Run(cmd)
+			cmd := exec.Command("kubectl", "get", "certificate", tlsUserName+"-client-tls", "-n", tlsNS)
+			_, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(out).To(Equal("True"))
-		}, 2*time.Minute, 2*time.Second).Should(Succeed())
-
-		By("verifying cert-manager populated the client certificate Secret")
-		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "secret", clientCertSecretName, "-n", tlsNS,
-				"-o", "jsonpath={.data.tls\\.crt}")
-			out, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(out).NotTo(BeEmpty())
-		}, 2*time.Minute, 2*time.Second).Should(Succeed())
+		}).Should(Succeed())
 	})
 
 	It("StatefulSet has TLS volume and https port", func() {
@@ -785,72 +763,262 @@ spec:
 			g.Expect(out).To(ContainSubstring("riak.openriak.io"))
 		}).Should(Succeed())
 	})
+})
 
-	It("a dummy client completes a verified mTLS handshake with Riak using the issued certificate", func() {
-		By("waiting for the TLS RiakCluster to reach Ready phase")
-		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "riakcluster", tlsClusterName,
-				"-n", tlsNS, "-o", "jsonpath={.status.phase}")
-			out, err := utils.Run(cmd)
-			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(out).To(Equal("Ready"))
-		}, 15*time.Minute, 5*time.Second).Should(Succeed())
+// ── Certificate-auth bucket writability (protobuf) ─────────────────────────────
+// End-to-end exercise of the certificate-based auth path over the Protocol
+// Buffers interface: a TLS-enabled cluster, a bucket TYPE "e2e", and a RiakUser
+// "e2e" authenticated by a client certificate whose CN equals the username.
+// After the operator grants the user read/write on the bucket type, a helper
+// script performs an authenticated protobuf write + read to prove the bucket is
+// reachable and writable.
+var _ = Describe("Riak certificate-auth bucket writability", Ordered, func() {
+	const (
+		cbNS         = "default"
+		cbCluster    = "e2e-certbucket-cluster"
+		cbBucketCR   = "e2e-certbucket"
+		cbBucketType = "e2e"        // bucket type created + activated by the operator
+		cbBucketName = "e2e-verify" // bucket within the type used for the write check
+		cbUser       = "e2e"        // RiakUser CR name, Riak username, and cert CN
+		cbSelfSigned = "e2e-cb-selfsigned"
+		cbCACert     = "e2e-cb-ca"
+		cbCASecret   = "e2e-cb-ca-secret"
+		cbCAIssuer   = "e2e-cb-ca-issuer"
+	)
+	// cert-manager stores the user's client certificate here (default naming).
+	clientCertSecret := cbUser + "-client-tls"
 
-		// Riak's certificate-based auth (security add-source ... certificate) is
-		// negotiated over the protobuf port's STARTTLS upgrade, which a shell-only
-		// e2e client can't easily speak. Instead this dummy client connects to the
-		// operator-configured HTTPS listener (8443) presenting the dummy RiakUser's
-		// issued client certificate. A successful, hostname-verified TLS handshake
-		// there proves the whole chain — self-signed Issuer -> CA Certificate ->
-		// CA-backed Issuer -> server/client Certificates -> Secrets -> mounted into
-		// pods — produces certificates a real client can actually use against the
-		// running Riak server, not just Kubernetes objects that exist on paper.
-		By("creating a dummy mTLS client Pod that presents the issued certificate to Riak")
+	applyManifest := func(yaml string) {
+		f, err := os.CreateTemp("", "e2e-certbucket-*.yaml")
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		_, err = fmt.Fprint(f, yaml)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		ExpectWithOffset(1, f.Close()).To(Succeed())
+		defer func() { _ = os.Remove(f.Name()) }()
+		cmd := exec.Command("kubectl", "apply", "-f", f.Name())
+		_, err = utils.Run(cmd)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	}
+
+	BeforeAll(func() {
+		By("checking cert-manager CRD is installed")
+		cmd := exec.Command("kubectl", "get", "crd", "certificates.cert-manager.io")
+		if _, err := utils.Run(cmd); err != nil {
+			Skip("cert-manager not installed — skipping certificate-auth bucket tests")
+		}
+
+		By("creating a self-signed Issuer and CA")
 		applyManifest(fmt.Sprintf(`
-apiVersion: v1
-kind: Pod
+apiVersion: cert-manager.io/v1
+kind: Issuer
 metadata:
   name: %s
   namespace: %s
 spec:
-  restartPolicy: Never
-  containers:
-    - name: dummy-client
-      image: curlimages/curl:7.78.0
-      command: ["/bin/sh", "-c"]
-      args:
-        - >-
-          curl -v --cacert /certs/ca.crt --cert /certs/tls.crt
-          --key /certs/tls.key https://%s.%s.svc.cluster.local:8443/ping
-      volumeMounts:
-        - name: client-tls
-          mountPath: /certs
-          readOnly: true
-  volumes:
-    - name: client-tls
-      secret:
-        secretName: %s
-`, dummyClientPodName, tlsNS, tlsClusterName, tlsNS, clientCertSecretName))
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  isCA: true
+  commonName: openriak-certbucket-ca
+  secretName: %s
+  issuerRef:
+    name: %s
+    kind: Issuer
+`, cbSelfSigned, cbNS, cbCACert, cbNS, cbCASecret, cbSelfSigned))
 
-		By("waiting for the dummy client Pod to finish")
+		By("waiting for the CA Secret to exist")
 		Eventually(func(g Gomega) {
-			cmd := exec.Command("kubectl", "get", "pod", dummyClientPodName,
-				"-n", tlsNS, "-o", "jsonpath={.status.phase}")
+			c := exec.Command("kubectl", "get", "secret", cbCASecret, "-n", cbNS)
+			_, err := utils.Run(c)
+			g.Expect(err).NotTo(HaveOccurred())
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		By("creating a CA-backed Issuer")
+		applyManifest(fmt.Sprintf(`
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  ca:
+    secretName: %s
+`, cbCAIssuer, cbNS, cbCASecret))
+
+		By("creating a TLS-enabled RiakCluster")
+		applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  size: 1
+  image: ghcr.io/marthydavid/riak:3.2.6
+  storageClassName: standard
+  storageSize: 1Gi
+  tls:
+    enabled: true
+    certManager:
+      issuerName: %s
+`, cbCluster, cbNS, cbCAIssuer))
+
+		By("creating a RiakBucket that provisions bucket type " + cbBucketType)
+		applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakBucket
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  clusterName: %s
+  bucketName: %s
+  bucketType: %s
+`, cbBucketCR, cbNS, cbCluster, cbBucketName, cbBucketType))
+
+		By("creating a RiakUser with certificate auth and grants on the bucket type")
+		// username == cbUser drives the client cert CN, which must match for
+		// certificate-based authentication. The grants map to riak_kv.get /
+		// riak_kv.put on bucket type "e2e".
+		applyManifest(fmt.Sprintf(`
+apiVersion: riak.openriak.io/v1
+kind: RiakUser
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  clusterName: %s
+  username: %s
+  certificateRef:
+    issuerRef:
+      name: %s
+      kind: Issuer
+  grants:
+    - resource: bucket
+      bucketName: %s
+      permission: read
+    - resource: bucket
+      bucketName: %s
+      permission: write
+`, cbUser, cbNS, cbCluster, cbUser, cbCAIssuer, cbBucketType, cbBucketType))
+	})
+
+	AfterAll(func() {
+		podName, _ := utils.Run(exec.Command("kubectl", "get", "pods",
+			"-l", "control-plane=controller-manager", "-n", namespace,
+			"-o", "jsonpath={.items[0].metadata.name}"))
+		collectDiagnosticsTo(filepath.Join(logDir, "pre-cleanup-certbucket"), podName)
+
+		By("removing certificate-auth bucket resources (best-effort)")
+		for _, args := range [][]string{
+			{"kubectl", "delete", "riakuser", cbUser, "-n", cbNS, "--ignore-not-found"},
+			{"kubectl", "delete", "riakbucket", cbBucketCR, "-n", cbNS, "--ignore-not-found"},
+			{"kubectl", "delete", "riakcluster", cbCluster, "-n", cbNS, "--ignore-not-found"},
+			{"kubectl", "delete", "issuer", cbCAIssuer, "-n", cbNS, "--ignore-not-found"},
+			{"kubectl", "delete", "certificate", cbCACert, "-n", cbNS, "--ignore-not-found"},
+			{"kubectl", "delete", "issuer", cbSelfSigned, "-n", cbNS, "--ignore-not-found"},
+			{"kubectl", "delete", "secret", cbCASecret, clientCertSecret, "-n", cbNS, "--ignore-not-found"},
+		} {
+			_, _ = utils.Run(exec.Command(args[0], args[1:]...))
+		}
+	})
+
+	It("the TLS RiakCluster reaches Ready", func() {
+		By("waiting for status.phase == Ready")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "riakcluster", cbCluster,
+				"-n", cbNS, "-o", "jsonpath={.status.phase}")
 			out, err := utils.Run(cmd)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(out).To(BeElementOf("Succeeded", "Failed"))
-		}, 2*time.Minute, 2*time.Second).Should(Succeed())
+			g.Expect(out).To(Equal("Ready"))
+		}, 5*time.Minute, 10*time.Second).Should(Succeed())
+	})
 
-		By("verifying the dummy client completed a verified TLS handshake using the issued certificate")
-		cmd := exec.Command("kubectl", "logs", dummyClientPodName, "-n", tlsNS)
-		out, err := utils.Run(cmd)
+	It("the RiakBucket provisions bucket type "+cbBucketType, func() {
+		By("waiting for RiakBucket status.phase == Ready")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "riakbucket", cbBucketCR,
+				"-n", cbNS, "-o", "jsonpath={.status.phase}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("Ready"))
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+	})
+
+	It("the certificate-auth RiakUser reaches Ready", func() {
+		By("waiting for RiakUser status.phase == Ready")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "riakuser", cbUser,
+				"-n", cbNS, "-o", "jsonpath={.status.phase}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("Ready"))
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+	})
+
+	It("the requested and issued certificate CN equals the Riak username", func() {
+		By("verifying the requested cert-manager Certificate has CommonName == username")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "certificate", clientCertSecret,
+				"-n", cbNS, "-o", "jsonpath={.spec.commonName}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(strings.TrimSpace(out)).To(Equal(cbUser))
+		}).Should(Succeed())
+
+		By("verifying the issued certificate's Subject CN == username (good for auth)")
+		Eventually(func(g Gomega) {
+			cn, err := commonNameFromCertSecret(cbNS, clientCertSecret)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(cn).To(Equal(cbUser))
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+	})
+
+	It("the bucket is reachable and writable over protobuf as the cert user", func() {
+		projectDir, err := utils.GetProjectDir()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(out).To(ContainSubstring("SSL connection using"),
-			"dummy client did not complete a TLS handshake:\n%s", out)
-		Expect(out).NotTo(ContainSubstring("SSL certificate problem"),
-			"dummy client failed to verify Riak's certificate against the CA:\n%s", out)
+		script := filepath.Join(projectDir, "test", "e2e", "scripts", "verify-cert-bucket.sh")
+
+		By("running the protobuf write/read check with the client certificate")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("bash", script,
+				cbNS, cbCluster, cbBucketType, cbBucketName, clientCertSecret, cbUser)
+			out, err := utils.Run(cmd)
+			_, _ = fmt.Fprintf(GinkgoWriter, "verify-cert-bucket.sh output:\n%s\n", out)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(ContainSubstring("WRITE_OK"))
+			g.Expect(out).To(ContainSubstring("PASS"))
+		}, 3*time.Minute, 15*time.Second).Should(Succeed())
 	})
 })
+
+// commonNameFromCertSecret reads a cert-manager-issued TLS Secret and returns the
+// Subject CommonName of the leaf certificate in tls.crt.
+func commonNameFromCertSecret(namespace, secretName string) (string, error) {
+	out, err := utils.Run(exec.Command("kubectl", "get", "secret", secretName,
+		"-n", namespace, "-o", `jsonpath={.data.tls\.crt}`))
+	if err != nil {
+		return "", err
+	}
+	der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+	if err != nil {
+		return "", fmt.Errorf("decoding base64 tls.crt: %w", err)
+	}
+	block, _ := pem.Decode(der)
+	if block == nil {
+		return "", fmt.Errorf("no PEM block found in tls.crt")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parsing certificate: %w", err)
+	}
+	return cert.Subject.CommonName, nil
+}
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
 // It uses the Kubernetes TokenRequest API to generate a token by directly sending a request

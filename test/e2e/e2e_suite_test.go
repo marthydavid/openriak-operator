@@ -130,37 +130,34 @@ var _ = BeforeSuite(func() {
 		}
 	}
 
-	// Install CRDs and deploy the operator once for the whole suite: both the
-	// Manager and Riak mTLS containers depend on them, and Ginkgo randomizes
-	// top-level container order.
-	By("creating manager namespace")
-	cmd = exec.Command("kubectl", "create", "ns", namespace)
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+	// Install CRDs and deploy the controller once for the whole suite. These must
+	// live at suite scope (not in a Describe's BeforeAll/AfterAll): Ginkgo randomizes
+	// top-level container order, so a per-Describe teardown would remove the CRDs and
+	// operator before other Describes (mTLS, cert-auth) run.
+	By("creating the manager namespace")
+	_, _ = utils.Run(exec.Command("kubectl", "create", "ns", namespace))
 
 	By("installing CRDs")
-	cmd = exec.Command("make", "install")
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+	_, err = utils.Run(exec.Command("make", "install"))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 	By("deploying the controller-manager")
-	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+	_, err = utils.Run(exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage)))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 })
 
 var _ = AfterSuite(func() {
+	By("cleaning up the curl-metrics pod")
+	_, _ = utils.Run(exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found"))
+
 	By("undeploying the controller-manager")
-	cmd := exec.Command("make", "undeploy")
-	_, _ = utils.Run(cmd)
+	_, _ = utils.Run(exec.Command("make", "undeploy"))
 
 	By("uninstalling CRDs")
-	cmd = exec.Command("make", "uninstall")
-	_, _ = utils.Run(cmd)
+	_, _ = utils.Run(exec.Command("make", "uninstall"))
 
-	By("removing manager namespace")
-	cmd = exec.Command("kubectl", "delete", "ns", namespace)
-	_, _ = utils.Run(cmd)
+	By("removing the manager namespace")
+	_, _ = utils.Run(exec.Command("kubectl", "delete", "ns", namespace))
 
 	// Teardown Prometheus and CertManager after the suite if not skipped and if they were not already installed
 	if !skipPrometheusInstall && !isPrometheusOperatorAlreadyInstalled {

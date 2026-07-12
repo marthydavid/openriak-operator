@@ -225,10 +225,10 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 			corev1.EnvVar{Name: "RIAK_CONFIG_SSL__KEYFILE", Value: riakTLSKeyFile},
 			corev1.EnvVar{Name: "RIAK_CONFIG_SSL__CACERTFILE", Value: riakTLSCACertFile},
 			corev1.EnvVar{Name: "RIAK_CONFIG_LISTENER__HTTPS__INTERNAL", Value: "0.0.0.0:8443"},
-			// check_crl defaults to on, and Riak's CRL check crashes the TLS handshake
-			// ({case_clause,{no_crl,...}} in ssl_handshake:certify) for any client cert
-			// without a CRL distribution point — which includes every cert-manager-issued
-			// certificate. Certificate-based auth over protobuf is unusable without this.
+			// cert-manager (and plain openssl) client certs have no CRL distribution
+			// point. Riak's default CRL check crashes the protobuf STARTTLS handshake
+			// on such certs ({case_clause,{no_crl,...}} in ssl_handshake:certify), so
+			// disable it. check_crl is a hidden riak_api key.
 			corev1.EnvVar{Name: "RIAK_CONFIG_CHECK_CRL", Value: "off"},
 		)
 		extraVolumes = []corev1.Volume{
@@ -302,9 +302,11 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 							Name:            "riak",
 							Image:           image,
 							ImagePullPolicy: pullPolicy,
-							// The image entrypoint ends in `riak console`, which attaches an
-							// Erlang shell to stdin. Without an open stdin the shell reads EOF
-							// and the node exits 0 shortly after boot, crash-looping the pod.
+							// Keep stdin/tty allocated for backward compatibility with Riak
+							// images whose entrypoint runs `riak console` (which attaches an
+							// Erlang shell to stdin and exits 0 on EOF, crash-looping the pod).
+							// The current image uses `riak start` + tail and does not need
+							// these, but they are harmless there.
 							Stdin: true,
 							TTY:   true,
 							Ports: containerPorts,
@@ -317,7 +319,10 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									Exec: &corev1.ExecAction{
-										Command: []string{"riak-admin", "ping"},
+										// `ping` is a subcommand of `riak`, not `riak-admin`
+										// (`riak-admin ping` exits non-zero with a usage error,
+										// which fails the probe and crash-loops the pod).
+										Command: []string{"riak", "ping"},
 									},
 								},
 								InitialDelaySeconds: 30,

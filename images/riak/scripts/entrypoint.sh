@@ -41,9 +41,17 @@ chown -R riak:riak /etc/riak /var/lib/riak /var/log/riak
 # ---------------------------------------------------------------------------
 POD_NAMESPACE="${POD_NAMESPACE:-default}"
 
-if [[ -n "${POD_NAME}" && -n "${RIAK_CLUSTER_NAME}" ]]; then
-    # DNS: <pod>.<cluster>-headless.<namespace>.svc.cluster.local
-    _default_node="riak@${POD_NAME}.${RIAK_CLUSTER_NAME}-headless.${POD_NAMESPACE}.svc.cluster.local"
+# Node identity.
+#
+# IMPORTANT: riak-admin derives the target node as riak@$(hostname) and ignores
+# the nodename in riak.conf. If the running node's name does not equal
+# riak@$(hostname), every riak-admin call (security enable/add-user/add-source,
+# bucket-type, grant, status, ...) fails to reach the node — and still exits 0,
+# so the failure is silent. In a StatefulSet pod $(hostname) == $POD_NAME, so we
+# name the node riak@$POD_NAME. The short hostname resolves locally via the pod's
+# /etc/hosts entry, which is enough for a single node.
+if [[ -n "${POD_NAME}" ]]; then
+    _default_node="riak@${POD_NAME}"
 else
     _default_node="riak@${POD_IP:-127.0.0.1}"
 fi
@@ -74,8 +82,10 @@ ring_size = ${RIAK_RING_SIZE}
 ## Storage
 storage_backend = ${RIAK_STORAGE_BACKEND}
 
-## Logging — send to console so Kubernetes captures it via kubectl logs.
-log.console = console
+## Logging — write to file; the entrypoint tails the file to stdout so
+## kubectl logs still captures output.
+log.console = file
+log.console.file = /var/log/riak/console.log
 log.console.level = info
 log.crash = on
 log.crash.size = 10MB
@@ -96,7 +106,58 @@ while IFS='=' read -r key value; do
 done < <(env | grep '^RIAK_CONFIG_') >> /etc/riak/riak.conf
 
 # ---------------------------------------------------------------------------
-# Start Riak in the foreground so the container exits when Riak stops.
-# 'riak console' runs the Erlang VM in the foreground (no daemon fork).
+# Ensure the log file exists before we tail it.
 # ---------------------------------------------------------------------------
-exec /usr/sbin/riak console
+touch /var/log/riak/console.log
+
+# ---------------------------------------------------------------------------
+# Start Riak in the foreground.
+#
+# 'riak start' daemonizes via run_erl + `riak console`. In some container
+# environments (notably under Kubernetes with a fully-qualified Erlang node
+# name) run_erl busy-loops at 100% CPU and the node never becomes responsive,
+# so `riak start` blocks forever waiting on the node and no listeners bind.
+# `riak foreground` runs the BEAM directly with -noinput (no run_erl, no stdin
+# needed), which avoids that hang. We background it so we can wait for readiness
+# and forward the console log to stdout. Riak's own deprecation notice also
+# recommends `foreground` over `start`.
+# ---------------------------------------------------------------------------
+echo "Starting Riak (foreground)..."
+/usr/sbin/riak foreground &
+RIAK_PID=$!
+
+# Stop Riak gracefully when the container is asked to terminate.
+trap 'echo "Termination signal received, stopping Riak..."; /usr/sbin/riak stop 2>/dev/null || kill "${RIAK_PID}" 2>/dev/null || true' TERM INT
+
+# ---------------------------------------------------------------------------
+# Wait for Riak to fully start. 'riak ping' returns 'pong' once the Erlang VM
+# is up and the node is accepting requests.
+# ---------------------------------------------------------------------------
+echo "Waiting for Riak to be ready..."
+RIAK_START_TIMEOUT="${RIAK_START_TIMEOUT:-120}"
+ELAPSED=0
+until /usr/sbin/riak ping 2>/dev/null | grep -q pong; do
+    if ! kill -0 "${RIAK_PID}" 2>/dev/null; then
+        echo "ERROR: Riak exited during startup" >&2
+        cat /var/log/riak/console.log >&2
+        exit 1
+    fi
+    if [ "${ELAPSED}" -ge "${RIAK_START_TIMEOUT}" ]; then
+        echo "ERROR: Riak did not become ready within ${RIAK_START_TIMEOUT}s" >&2
+        cat /var/log/riak/console.log >&2
+        exit 1
+    fi
+    sleep 2
+    ELAPSED=$((ELAPSED + 2))
+done
+echo "Riak is ready (ping=pong)."
+
+# ---------------------------------------------------------------------------
+# Forward the console log to stdout so Kubernetes captures it via kubectl logs.
+# --pid ties the tail's lifetime to the Riak process.
+# ---------------------------------------------------------------------------
+tail --pid "${RIAK_PID}" -F /var/log/riak/console.log &
+
+# Block until Riak exits (crash or graceful stop); the container lifecycle
+# tracks the node process.
+wait "${RIAK_PID}"
