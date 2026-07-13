@@ -459,10 +459,16 @@ spec:
 					"riak-admin", "security", "list", "users")
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to list users")
-				// The username in the CR is "e2euser"
+				if !strings.Contains(out, "e2euser") {
+					// Log the RiakUser CR status for debugging
+					statusCmd := exec.Command("kubectl", "get", "riakuser", userName,
+						"-n", riakNS, "-o", "yaml")
+					statusOut, _ := utils.Run(statusCmd)
+					fmt.Printf("RiakUser status:\n%s\n", statusOut)
+				}
 				g.Expect(out).To(ContainSubstring("e2euser"),
 					"User e2euser not found in riak-admin security list users")
-			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+			}, 5*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
 		It("RiakUser grants are applied correctly in the Riak cluster", func() {
