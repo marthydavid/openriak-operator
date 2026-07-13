@@ -82,20 +82,24 @@ jobs:
           docker load < /tmp/operator-image.tar
           kind load docker-image ${{ env.IMG }} --name e2e
 
-      - name: Pre-pull Riak operand image into Kind
-        # Pull the Riak image on the host and load it into Kind so the StatefulSet
-        # pods don't need to hit the registry during the test — avoids timeouts
-        # on the Ready-phase checks that wait for Riak to actually start.
+      - name: Build Riak operand image from this branch and load into Kind
+        # Build the operand from the branch under test instead of pulling the
+        # published tag. Pulling meant operand changes were never runtime-validated
+        # before merge — a broken published 3.2.6 turned every e2e run red with no
+        # way for the fixing branch to prove itself. Loading into Kind also keeps
+        # pods off the registry during the test (imagePullPolicy IfNotPresent).
         run: |
-          docker pull ghcr.io/marthydavid/riak:3.2.6
+          docker build -t ghcr.io/marthydavid/riak:3.2.6 images/riak/
           kind load docker-image ghcr.io/marthydavid/riak:3.2.6 --name e2e
 
       - name: Run e2e tests
         env:
           IMG: ${{ env.IMG }}
           E2E_LOG_DIR: /tmp/e2e-logs
-          # Prometheus isn't exercised by any test; cert-manager is required by the
-          # mTLS suite, so BeforeSuite installs it (skips install if already present).
+          # Prometheus isn't exercised by any test. cert-manager IS required —
+          # the mTLS and cert-auth suites Skip() themselves without it, which
+          # silently drops the certificate-auth coverage; BeforeSuite installs
+          # it (and skips the install if already present).
           PROMETHEUS_INSTALL_SKIP: "true"
         run: |
           go mod tidy
