@@ -456,7 +456,7 @@ spec:
 			By("verifying the user exists via riak-admin security listing")
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
-					"riak-admin", "security", "list", "users")
+					"riak-admin", "security", "print-users")
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to list users")
 				if !strings.Contains(out, "e2euser") {
