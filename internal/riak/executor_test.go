@@ -383,7 +383,8 @@ func TestGrantPermission_nosBucket(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	joined := strings.Join((*calls)[0].args, " ")
-	if !strings.Contains(joined, "security grant read on any to alice") {
+	// "read" is mapped to the Riak KV permission riak_kv.get.
+	if !strings.Contains(joined, "security grant riak_kv.get on any to alice") {
 		t.Errorf("unexpected args: %s", joined)
 	}
 }
@@ -392,12 +393,44 @@ func TestGrantPermission_withBucket(t *testing.T) {
 	runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
 	e := newTestExecutor(runner)
 
-	if err := e.GrantPermission(context.Background(), "ns", "pod", "riak", "alice", "bucket", "write", "mybucket"); err != nil {
+	// resource=bucket with a bucket-type target grants on that type.
+	if err := e.GrantPermission(context.Background(), "ns", "pod", "riak", "alice", "bucket", "write", "mybuckettype"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	joined := strings.Join((*calls)[0].args, " ")
-	if !strings.Contains(joined, "mybucket") {
-		t.Errorf("expected bucket name in args: %s", joined)
+	// "write" is mapped to riak_kv.put and the target is the bucket type.
+	if !strings.Contains(joined, "security grant riak_kv.put on mybuckettype to alice") {
+		t.Errorf("unexpected args: %s", joined)
+	}
+}
+
+func TestGrantPermission_withBucketTypeAndBucket(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
+	e := newTestExecutor(runner)
+
+	// A "<type> <bucket>" target scopes the grant to a single bucket in a type.
+	if err := e.GrantPermission(context.Background(), "ns", "pod", "riak", "alice", "bucket", "read", "mytype mybucket"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	joined := strings.Join((*calls)[0].args, " ")
+	if !strings.Contains(joined, "security grant riak_kv.get on mytype mybucket to alice") {
+		t.Errorf("unexpected args: %s", joined)
+	}
+}
+
+func TestRiakKVPermissions_mapsFriendlyNames(t *testing.T) {
+	cases := map[string]string{
+		"read":        "riak_kv.get",
+		"write":       "riak_kv.put",
+		"delete":      "riak_kv.delete",
+		"list":        "riak_kv.list_keys,riak_kv.list_buckets",
+		"admin":       "riak_kv.get,riak_kv.put,riak_kv.delete,riak_kv.list_keys,riak_kv.list_buckets",
+		"riak_kv.get": "riak_kv.get", // unknown/already-qualified passes through
+	}
+	for in, want := range cases {
+		if got := riakKVPermissions(in); got != want {
+			t.Errorf("riakKVPermissions(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
