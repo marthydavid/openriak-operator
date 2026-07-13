@@ -277,7 +277,7 @@ metadata:
 spec:
   clusterName: %s
   bucketName: e2e-app-data
-  bucketType: default
+  bucketType: e2e-app-type
 `, bucketName, riakNS, clusterName))
 
 			By("creating a RiakUser with read/write grants")
@@ -438,15 +438,17 @@ spec:
 		})
 
 		It("RiakBucket exists in the Riak cluster after CR reaches Ready", func() {
-			By("verifying the bucket exists via riak-admin bucket-type list")
+			// The operator materialises a RiakBucket CR as a Riak bucket *type*
+			// named spec.bucketType (buckets themselves only exist on first
+			// write), so the Riak-side check is for the type.
+			By("verifying the bucket type exists via riak-admin bucket-type list")
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
 					"riak-admin", "bucket-type", "list")
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to list bucket types")
-				// The bucket name in the CR is "e2e-app-data", which should be listed
-				g.Expect(out).To(ContainSubstring("e2e-app-data"),
-					"Bucket e2e-app-data not found in riak-admin bucket-type list")
+				g.Expect(out).To(ContainSubstring("e2e-app-type"),
+					"Bucket type e2e-app-type not found in riak-admin bucket-type list")
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 
