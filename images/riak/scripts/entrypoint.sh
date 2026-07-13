@@ -19,19 +19,10 @@
 
 set -eo pipefail
 
-# ---------------------------------------------------------------------------
-# Prepare runtime directories
-# ---------------------------------------------------------------------------
-# Riak needs /var/run/riak for runtime state. The riak user created by the
-# RPM may not have write access to /var/run on some container runtimes.
-# Create the directory and ensure it's owned by the riak user.
-if [[ ! -d /var/run/riak ]]; then
-    mkdir -p /var/run/riak
-fi
-chown -R riak:riak /var/run/riak
-
-# Ensure all Riak directories are writable by the riak user
-chown -R riak:riak /etc/riak /var/lib/riak /var/log/riak
+# NOTE: no runtime mkdir/chown here — the entrypoint runs as the riak user
+# (USER riak), so mkdir/chown under root-owned paths fails and set -e kills
+# the container before Riak starts. /var/run/riak and directory ownership
+# are baked into the image at build time (Dockerfile, as root).
 
 # ---------------------------------------------------------------------------
 # Node identity
