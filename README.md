@@ -10,7 +10,9 @@ A production-ready Kubernetes operator for managing Riak clusters with full life
 - **Bucket Management**: Automated bucket type and bucket provisioning via RiakBucket resources
 - **mTLS via cert-manager**: Enable TLS on a cluster (`spec.tls`) to have cert-manager issue the
   server certificate, and authenticate users with client certificates (`spec.certificateRef`) — the
-  issued certificate's CommonName is the Riak username
+  issued certificate's CommonName is the Riak username ([full guide](docs/mtls.md))
+- **Configurable Operand Image**: Set a fleet-wide default Riak image via the operator's
+  `--riak-image` flag, overridable per cluster with `spec.image` ([config reference](docs/operator-configuration.md))
 - **Health Checks**: Lightweight TCP liveness/readiness probes on the protobuf port
 - **Graceful Scaling**: Support for rolling updates and node scaling with pod affinity
 - **Operator Framework**: Built with kubebuilder following Kubernetes best practices
