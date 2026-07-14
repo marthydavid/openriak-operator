@@ -8,8 +8,10 @@ A production-ready Kubernetes operator for managing Riak clusters with full life
 - **Configuration Management**: Dynamic Riak configuration through RiakCluster CRDs
 - **User & ACL Management**: Create users and manage granular access grants via RiakUser resources
 - **Bucket Management**: Automated bucket type and bucket provisioning via RiakBucket resources
-- **TLS Support**: Prepared for cert-manager integration for secure inter-node communication
-- **Health Checks**: Built-in liveness and readiness probes for all nodes
+- **mTLS via cert-manager**: Enable TLS on a cluster (`spec.tls`) to have cert-manager issue the
+  server certificate, and authenticate users with client certificates (`spec.certificateRef`) — the
+  issued certificate's CommonName is the Riak username
+- **Health Checks**: Lightweight TCP liveness/readiness probes on the protobuf port
 - **Graceful Scaling**: Support for rolling updates and node scaling with pod affinity
 - **Operator Framework**: Built with kubebuilder following Kubernetes best practices
 
@@ -114,8 +116,8 @@ spec:
   # Number of Riak nodes
   size: 3
 
-  # Container image
-  image: riak/riak:latest
+  # Container image (optional; defaults to ghcr.io/marthydavid/riak:3.2.6)
+  image: ghcr.io/marthydavid/riak:3.2.6
   imagePullPolicy: IfNotPresent
 
   # Compute resources per node
@@ -144,18 +146,20 @@ spec:
   nodeSelector:
     disktype: ssd
 
-  # TLS configuration (cert-manager integration)
+  # TLS configuration (cert-manager integration). When enabled, the operator has
+  # cert-manager issue the node's server certificate and turns on protobuf STARTTLS.
+  # Use an internal CA issuer (client certs for mTLS users must chain to the same CA).
   tls:
     enabled: false
     certManager:
-      issuerName: letsencrypt-prod
-      issuerKind: ClusterIssuer
+      issuerName: riak-ca-issuer
+      issuerKind: Issuer   # Issuer or ClusterIssuer
 
 status:
   phase: Ready
   readyNodes: 3
   members:
-    - name: riak@my-cluster-0.my-cluster-headless.default.svc.cluster.local
+    - name: my-cluster-0
       pod: my-cluster-0
       ready: true
   conditions:
@@ -255,6 +259,50 @@ status:
   created: true
   lastUpdateTime: "2024-05-18T10:30:00Z"
 ```
+
+#### Certificate-based (mTLS) authentication
+
+Instead of a password, a user can authenticate with a client certificate. Set `certificateRef`
+(and omit `passwordSecret`); the operator asks cert-manager to issue a client certificate whose
+**CommonName equals `spec.username`**, which is what Riak matches for certificate auth. The cluster
+must have TLS enabled (`spec.tls.enabled: true`), and the user's issuer should chain to the same CA
+as the cluster's issuer so the node trusts the client certificate.
+
+```yaml
+apiVersion: riak.openriak.io/v1
+kind: RiakUser
+metadata:
+  name: appuser
+  namespace: default
+spec:
+  clusterName: my-cluster
+  username: appuser
+
+  # mTLS client-certificate authentication (mutually exclusive with passwordSecret)
+  certificateRef:
+    issuerRef:
+      name: my-ca-issuer
+      kind: Issuer            # Issuer or ClusterIssuer
+    # secretName is optional; defaults to <riakuser-name>-client-tls
+    secretName: appuser-client-tls
+
+  grants:
+    - resource: bucket
+      bucketName: mydata
+      permission: read
+    - resource: bucket
+      bucketName: mydata
+      permission: write
+```
+
+Clients then connect over the protobuf port using the issued certificate (`tls.crt` / `tls.key` /
+`ca.crt` from the secret) and authenticate as the user matching the certificate CommonName. A
+minimal, dependency-free reference client that performs a STARTTLS write/read is at
+`test/e2e/scripts/pb_cert_auth_check.py`.
+
+> **Note:** grant `permission` values (`read`/`write`/`delete`/`list`/`admin`) map to Riak KV
+> permissions (`riak_kv.get`, `riak_kv.put`, …). A grant with `resource: bucket` applies to the
+> named bucket **type**.
 
 ## Monitoring and Troubleshooting
 
@@ -453,7 +501,7 @@ For issues, questions, or feature requests:
 
 ## Roadmap
 
-- [ ] TLS/cert-manager integration
+- [x] TLS/cert-manager integration (server TLS + mTLS client-certificate user auth)
 - [ ] Automated backups
 - [ ] Cluster monitoring and metrics
 - [ ] Helm chart
