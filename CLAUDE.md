@@ -94,13 +94,16 @@ JSON literal (number, bool) are sent as their native type.
 
 All images are published to **GitHub Container Registry** under `ghcr.io/marthydavid/`:
 
-| Image | Registry path |
-|-------|--------------|
-| Operator | `ghcr.io/marthydavid/openriak-operator:<tag>` |
-| Riak KV 3.2 | `ghcr.io/marthydavid/riak:3.2.6` |
+| Image | Registry path | Base |
+|-------|--------------|------|
+| Operator | `ghcr.io/marthydavid/openriak-operator:<tag>` | Go 1.22 / alpine |
+| Riak KV 3.2 (default, `latest`) | `ghcr.io/marthydavid/riak:3.2.6` | UBI8 (el8 RPM, OTP24) |
+| Riak KV 3.4 | `ghcr.io/marthydavid/riak:3.4.0` | UBI9 (el9 RPM, OTP26) |
 
-The Riak image is built from `images/riak/Dockerfile` (UBI9 base, RPM from files.tiot.jp).  
-The operator image is built from the root `Dockerfile` (Go 1.22 / alpine, multi-arch amd64+arm64).
+The Riak image is built from `images/riak/Dockerfile`, parameterized by build args
+(`RIAK_SERIES`/`RIAK_VERSION`/`RIAK_OTP`/`RHEL_VERSION`) because upstream ships each release for
+specific RHEL majors only. The published combinations live in the build-riak workflow matrix.
+The operator image is built from the root `Dockerfile` (multi-arch amd64+arm64).
 
 Build locally:
 
@@ -119,7 +122,7 @@ make docker-push  IMG=ghcr.io/marthydavid/openriak-operator:dev
 | Build Riak Image | `.github/workflows/build-riak.yml` | push `main`/tags `riak-*` when `images/riak/**` changes, PRs | `ghcr.io/marthydavid/riak` |
 
 Operator tags: semver on `v*` tags, short-SHA on every push, `latest` on `main`.  
-Riak tags: version extracted from `ARG RIAK_VERSION` in the Dockerfile, `latest` on `main`.  
+Riak tags: one per matrix entry (`3.2.6`, `3.4.0`); `latest` follows the 3.2.x default on `main`.  
 PRs build but do **not** push (no registry credentials needed).
 
 The controller's fallback image (when `spec.image` is omitted) is `ghcr.io/marthydavid/riak:3.2.6`.

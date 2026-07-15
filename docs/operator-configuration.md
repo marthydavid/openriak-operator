@@ -23,6 +23,9 @@ The image for Riak pods is resolved in this order:
 2. The operator's `--riak-image` flag
 3. The built-in default (`ghcr.io/marthydavid/riak:3.2.6`)
 
+Published operand variants: `riak:3.2.6` (UBI8/el8, OTP24 — the default) and
+`riak:3.4.0` (UBI9/el9, OTP26). Either works with `--riak-image` or `spec.image`.
+
 Use `--riak-image` to pin the fleet-wide default — for example an internal registry
 mirror — without editing every `RiakCluster`:
 
