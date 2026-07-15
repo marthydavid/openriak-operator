@@ -222,7 +222,7 @@ var _ = Describe("Manager", Ordered, func() {
 			clusterName = "e2e-cluster"
 			bucketName  = "e2e-bucket"
 			userName    = "e2e-user"
-			secretName  = "e2e-user-secret"
+			issuerName  = "e2e-user-issuer"
 		)
 
 		// applyManifest writes YAML to a temp file and runs kubectl apply.
@@ -255,17 +255,16 @@ spec:
     ring_size: "8"
 `, clusterName, riakNS))
 
-			By("creating the password Secret for the RiakUser")
+			By("creating a self-signed Issuer for the RiakUser client certificate")
 			applyManifest(fmt.Sprintf(`
-apiVersion: v1
-kind: Secret
+apiVersion: cert-manager.io/v1
+kind: Issuer
 metadata:
   name: %s
   namespace: %s
-type: Opaque
-stringData:
-  password: e2etestpassword
-`, secretName, riakNS))
+spec:
+  selfSigned: {}
+`, issuerName, riakNS))
 
 			By("creating a RiakBucket")
 			applyManifest(fmt.Sprintf(`
@@ -290,15 +289,16 @@ metadata:
 spec:
   clusterName: %s
   username: e2euser
-  passwordSecret:
-    name: %s
-    key: password
+  certificateRef:
+    issuerRef:
+      name: %s
+      kind: Issuer
   grants:
     - resource: any
       permission: read
     - resource: any
       permission: write
-`, userName, riakNS, clusterName, secretName))
+`, userName, riakNS, clusterName, issuerName))
 		})
 
 		AfterAll(func() {
@@ -311,7 +311,8 @@ spec:
 				{"kubectl", "delete", "riakuser", userName, "-n", riakNS, "--ignore-not-found"},
 				{"kubectl", "delete", "riakbucket", bucketName, "-n", riakNS, "--ignore-not-found"},
 				{"kubectl", "delete", "riakcluster", clusterName, "-n", riakNS, "--ignore-not-found"},
-				{"kubectl", "delete", "secret", secretName, "-n", riakNS, "--ignore-not-found"},
+				{"kubectl", "delete", "issuer", issuerName, "-n", riakNS, "--ignore-not-found"},
+				{"kubectl", "delete", "secret", userName + "-client-tls", "-n", riakNS, "--ignore-not-found"},
 				{"kubectl", "delete", "riakcluster", "e2e-default-image", "-n", riakNS, "--ignore-not-found"},
 			} {
 				cmd := exec.Command(args[0], args[1:]...)

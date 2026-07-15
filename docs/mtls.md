@@ -145,7 +145,7 @@ spec:
       permission: write
 ```
 
-When `certificateRef` is set, `passwordSecret` is ignored.
+`certificateRef` is required: client certificates are the only supported authentication mode.
 
 ### What the operator does
 

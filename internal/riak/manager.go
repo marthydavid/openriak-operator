@@ -109,16 +109,6 @@ func (m *Manager) CreateBucketType(ctx context.Context, cluster *riakv1.RiakClus
 	return m.executor.CreateBucket(ctx, cluster.Namespace, pod, "riak", bucketType, "", properties)
 }
 
-// CreateUser creates a user in the cluster.
-func (m *Manager) CreateUser(ctx context.Context, cluster *riakv1.RiakCluster, username, password string) error {
-	if len(cluster.Status.Members) == 0 {
-		return fmt.Errorf("no cluster members available")
-	}
-
-	pod := cluster.Status.Members[0].Pod
-	return m.executor.CreateUser(ctx, cluster.Namespace, pod, "riak", username, password)
-}
-
 // GrantUserPermission grants permissions to a user.
 func (m *Manager) GrantUserPermission(ctx context.Context, cluster *riakv1.RiakCluster, username, resource, permission, bucket string) error {
 	if len(cluster.Status.Members) == 0 {

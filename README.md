@@ -214,16 +214,6 @@ status:
 Creates users and grants permissions in a Riak cluster.
 
 ```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: appuser-password
-  namespace: default
-type: Opaque
-data:
-  password: c2VjdXJlcGFzc3dvcmQ=  # base64 encoded
-
----
 apiVersion: riak.openriak.io/v1
 kind: RiakUser
 metadata:
@@ -236,10 +226,12 @@ spec:
   # Riak username
   username: appuser
 
-  # Password stored in a Secret
-  passwordSecret:
-    name: appuser-password
-    key: password
+  # mTLS client-certificate authentication (required — the only auth mode).
+  # cert-manager issues a certificate with CommonName == spec.username.
+  certificateRef:
+    issuerRef:
+      name: my-ca-issuer
+      kind: Issuer
 
   # Access grants
   grants:
@@ -264,8 +256,8 @@ status:
 
 #### Certificate-based (mTLS) authentication
 
-Instead of a password, a user can authenticate with a client certificate. Set `certificateRef`
-(and omit `passwordSecret`); the operator asks cert-manager to issue a client certificate whose
+Users authenticate exclusively with mTLS client certificates — `certificateRef` is required.
+The operator asks cert-manager to issue a client certificate whose
 **CommonName equals `spec.username`**, which is what Riak matches for certificate auth. The cluster
 must have TLS enabled (`spec.tls.enabled: true`), and the user's issuer should chain to the same CA
 as the cluster's issuer so the node trusts the client certificate.
@@ -280,7 +272,7 @@ spec:
   clusterName: my-cluster
   username: appuser
 
-  # mTLS client-certificate authentication (mutually exclusive with passwordSecret)
+  # mTLS client-certificate authentication (required)
   certificateRef:
     issuerRef:
       name: my-ca-issuer

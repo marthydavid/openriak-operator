@@ -1,12 +1,8 @@
-apiVersion: v1
-kind: Secret
-metadata:
-  name: app-user-secret
-  namespace: default
-type: Opaque
-data:
-  password: Y2hhbmdlbWUxMjM=  # changeme123 in base64
----
+# RiakUsers authenticate with mTLS client certificates only: the operator asks
+# cert-manager to issue a certificate whose CommonName equals spec.username,
+# which is what Riak matches for certificate auth. The issuer should chain to
+# the same CA as the cluster's issuer (see 2-prod-cluster.yaml) so the node
+# trusts the client certificate.
 apiVersion: riak.openriak.io/v1
 kind: RiakUser
 metadata:
@@ -15,9 +11,11 @@ metadata:
 spec:
   clusterName: riak-cluster-dev
   username: appuser
-  passwordSecret:
-    name: app-user-secret
-    key: password
+  certificateRef:
+    issuerRef:
+      name: riak-ca-issuer
+      kind: Issuer            # Issuer or ClusterIssuer
+    # secretName is optional; defaults to <riakuser-name>-client-tls
   grants:
     - resource: any
       permission: read

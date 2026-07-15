@@ -132,13 +132,13 @@ The controller's fallback image (when `spec.image` is omitted) is `ghcr.io/marth
 |---------|--------------|
 | Command injection via kubectl exec | `executor.go` uses `exec.CommandContext` with argument array — no shell is invoked; metacharacters are literal |
 | `RIAK_CONFIG_*` env var injection | Requires Kubernetes RBAC write access to RiakCluster; env vars are a trusted boundary |
-| Config key-value logging in `SetConfig` | Only logs Riak node config params; user passwords go through `CreateUser()` and are never passed to `SetConfig` |
+| Config key-value logging in `SetConfig` | Only logs Riak node config params; no credentials exist — users authenticate by client certificate only |
 
-### Open Vulnerability
+### Resolved: hardcoded default password
 
-**Hardcoded default password** (`internal/controller/riakuser_controller.go:139`):  
-`passwordSecret` is optional; when omitted, the operator sets the Riak user password to `"changeme"`.  
-Fix: add `+kubebuilder:validation:Required` to `PasswordSecret` in `api/v1/riakuser_types.go`, or auto-generate a random secret.
+Password authentication was removed entirely: `RiakUser.spec.certificateRef` is required and
+users authenticate by mTLS client certificate (CN == username). There is no password field,
+no password executor path, and therefore no default password.
 
 ## Finalizer Pattern
 

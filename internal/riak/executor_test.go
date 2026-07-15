@@ -297,77 +297,18 @@ func TestCreateBucket_returnsActivateError(t *testing.T) {
 	}
 }
 
-// ---------- CreateUser ----------
+// ---------- CreateUserForCert: add-user error ----------
 
-func TestCreateUser_enablesSecurityAndAddsUser(t *testing.T) {
-	runner, calls := mockRunner(map[string]string{"security": ""}, nil)
-	e := newTestExecutor(runner)
-
-	if err := e.CreateUser(context.Background(), "ns", "pod", "riak", "alice", "secret"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	var hasEnable, hasAddUser bool
-	for _, c := range *calls {
-		joined := strings.Join(c.args, " ")
-		if strings.Contains(joined, "security enable") {
-			hasEnable = true
-		}
-		if strings.Contains(joined, "security add-user alice") {
-			hasAddUser = true
-		}
-	}
-	if !hasEnable {
-		t.Error("expected 'security enable' call")
-	}
-	if !hasAddUser {
-		t.Error("expected 'security add-user alice' call")
-	}
-}
-
-func TestCreateUser_failsOnNonAlreadyEnableError(t *testing.T) {
+func TestCreateUserForCert_returnsAddUserError(t *testing.T) {
 	runner := func(_ context.Context, _ string, args ...string) (string, error) {
-		if strings.Contains(strings.Join(args, " "), "security enable") {
-			return "", errors.New("network timeout")
-		}
-		return "", nil
-	}
-	e := newTestExecutor(runner)
-
-	err := e.CreateUser(context.Background(), "ns", "pod", "riak", "alice", "pwd")
-	if err == nil {
-		t.Fatal("expected error from non-already enable failure, got nil")
-	}
-}
-
-func TestCreateUser_ignoresAlreadyEnabledError(t *testing.T) {
-	callCount := 0
-	runner := func(_ context.Context, _ string, args ...string) (string, error) {
-		callCount++
-		joined := strings.Join(args, " ")
-		if strings.Contains(joined, "security enable") {
-			return "", errors.New("security already enabled")
-		}
-		return "", nil
-	}
-	e := newTestExecutor(runner)
-
-	if err := e.CreateUser(context.Background(), "ns", "pod", "riak", "alice", "pwd"); err != nil {
-		t.Fatalf("unexpected error for already-enabled: %v", err)
-	}
-}
-
-func TestCreateUser_returnsAddUserError(t *testing.T) {
-	runner := func(_ context.Context, _ string, args ...string) (string, error) {
-		joined := strings.Join(args, " ")
-		if strings.Contains(joined, "add-user") {
+		if strings.Contains(strings.Join(args, " "), "add-user") {
 			return "", errors.New("user creation failed")
 		}
 		return "", nil
 	}
 	e := newTestExecutor(runner)
 
-	err := e.CreateUser(context.Background(), "ns", "pod", "riak", "alice", "pwd")
+	err := e.CreateUserForCert(context.Background(), "ns", "pod", "riak", "alice")
 	if err == nil {
 		t.Fatal("expected error from add-user, got nil")
 	}
@@ -526,7 +467,7 @@ func TestAddSecuritySource_sendsCorrectArgs(t *testing.T) {
 	}
 }
 
-func TestAddSecuritySource_passwordSourceType(t *testing.T) {
+func TestAddSecuritySource_passesSourceTypeThrough(t *testing.T) {
 	runner, calls := mockRunner(map[string]string{"security add-source": ""}, nil)
 	e := newTestExecutor(runner)
 

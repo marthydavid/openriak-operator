@@ -30,30 +30,20 @@ type RiakUserSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Username string `json:"username"`
 
-	// Password is the user password (stored in a Secret).
-	// PasswordSecret references a Secret containing the password.
-	PasswordSecret *PasswordSecretRef `json:"passwordSecret,omitempty"`
-
 	// Grants are the permissions to grant to this user.
 	Grants []Grant `json:"grants,omitempty"`
 
-	// CertificateRef enables mTLS client authentication via a cert-manager Certificate.
-	// When set, passwordSecret is ignored; Riak authenticates this user by client certificate.
-	CertificateRef *UserCertificateRef `json:"certificateRef,omitempty"`
-}
-
-// PasswordSecretRef references a Secret containing user password.
-type PasswordSecretRef struct {
-	// Name is the Secret name.
-	Name string `json:"name"`
-
-	// Key is the key in the Secret containing the password.
-	Key string `json:"key,omitempty"`
+	// CertificateRef configures mTLS client-certificate authentication via cert-manager.
+	// It is required: users always authenticate by client certificate (password auth is
+	// not supported). Riak authenticates the user by the certificate's CommonName, which
+	// the operator sets to spec.username.
+	// +kubebuilder:validation:Required
+	CertificateRef *UserCertificateRef `json:"certificateRef"`
 }
 
 // UserCertificateRef configures cert-manager to issue a client TLS certificate for this user.
-// When set, passwordSecret is ignored and Riak authenticates the user by client certificate.
-// The issued certificate's CommonName must match spec.username.
+// Riak authenticates the user by client certificate; the issued certificate's CommonName
+// must match spec.username.
 type UserCertificateRef struct {
 	// IssuerRef references the cert-manager Issuer or ClusterIssuer to sign the certificate.
 	IssuerRef CertIssuerRef `json:"issuerRef"`
