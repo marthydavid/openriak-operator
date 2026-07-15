@@ -1,0 +1,54 @@
+# Default values for openriak-operator.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/marthydavid/openriak-operator
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+riak:
+  # Default operand image used when a RiakCluster omits spec.image
+  # (passed to the operator as --riak-image).
+  image: ghcr.io/marthydavid/riak:3.2.6
+
+# Leader election is required when replicaCount > 1.
+leaderElection:
+  enabled: true
+
+metrics:
+  # Serve authenticated /metrics on :8443 and create the metrics Service
+  # plus the token-review RBAC the endpoint needs.
+  enabled: true
+  serviceMonitor:
+    # Requires the Prometheus Operator CRDs.
+    enabled: false
+
+serviceAccount:
+  create: true
+  # Defaults to the release fullname when empty.
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+podAnnotations: {}
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

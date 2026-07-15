@@ -1,0 +1,22 @@
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "openriak-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "openriak-operator.labels" . | nindent 4 }}
+spec:
+  endpoints:
+    - path: /metrics
+      port: https
+      scheme: https
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        # The manager serves metrics with a self-signed certificate; provide
+        # ca/cert/key files here instead if you issue it a real certificate.
+        insecureSkipVerify: true
+  selector:
+    matchLabels:
+      {{- include "openriak-operator.selectorLabels" . | nindent 6 }}
+{{- end }}

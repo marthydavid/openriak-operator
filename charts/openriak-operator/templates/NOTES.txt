@@ -1,0 +1,14 @@
+{{ .Chart.Name }} {{ .Chart.Version }} installed as {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+The operator watches RiakCluster, RiakBucket and RiakUser resources in all namespaces.
+Default operand image: {{ .Values.riak.image }}
+
+RiakUsers authenticate with mTLS client certificates issued by cert-manager, which
+must be installed for TLS-enabled clusters and users:
+  https://cert-manager.io/docs/installation/
+
+Quick start:
+  kubectl get pods -n {{ .Release.Namespace }} -l control-plane=controller-manager
+  kubectl apply -f https://raw.githubusercontent.com/marthydavid/openriak-operator/main/examples/0-local-dev-cluster.yaml
+
+Documentation: https://github.com/marthydavid/openriak-operator/tree/main/docs

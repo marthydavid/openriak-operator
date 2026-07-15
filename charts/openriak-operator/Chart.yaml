@@ -1,0 +1,19 @@
+apiVersion: v2
+name: openriak-operator
+description: Kubernetes operator for OpenRiak — manages RiakCluster, RiakBucket and RiakUser resources with mTLS certificate authentication via cert-manager.
+type: application
+# Chart version; bumped independently of the operator image (appVersion).
+version: 0.1.0
+# Operator image tag installed by default.
+appVersion: "latest"
+home: https://github.com/marthydavid/openriak-operator
+sources:
+  - https://github.com/marthydavid/openriak-operator
+keywords:
+  - riak
+  - openriak
+  - database
+  - operator
+maintainers:
+  - name: marthydavid
+    url: https://github.com/marthydavid
