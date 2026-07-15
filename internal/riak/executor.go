@@ -136,17 +136,6 @@ func (e *Executor) CreateBucket(ctx context.Context, namespace, podName, contain
 	return nil
 }
 
-// CreateUser creates a Riak user with the given password.
-func (e *Executor) CreateUser(ctx context.Context, namespace, podName, containerName, username, password string) error {
-	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "enable")
-	if err != nil && !strings.Contains(err.Error(), "already") {
-		return err
-	}
-
-	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "add-user", username, fmt.Sprintf("password=%s", password))
-	return err
-}
-
 // CreateUserForCert creates a Riak user without a password for certificate-based authentication.
 // The user is still created in the security system; a separate AddSecuritySource call configures
 // the certificate source so Riak accepts client certs with CN == username.
@@ -161,7 +150,7 @@ func (e *Executor) CreateUserForCert(ctx context.Context, namespace, podName, co
 }
 
 // AddSecuritySource configures how a Riak user authenticates.
-// sourceType is "password" or "certificate".
+// The operator always uses the "certificate" source (mTLS client cert, CN == username).
 func (e *Executor) AddSecuritySource(ctx context.Context, namespace, podName, containerName, username, sourceType string) error {
 	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName,
 		"security", "add-source", username, "0.0.0.0/0", sourceType)

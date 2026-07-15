@@ -24,7 +24,6 @@ import (
 	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -73,6 +72,9 @@ var _ = Describe("RiakUser Controller", func() {
 					Spec: riakv1.RiakUserSpec{
 						ClusterName: "nonexistent-cluster",
 						Username:    "alice",
+						CertificateRef: &riakv1.UserCertificateRef{
+							IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						},
 					},
 				})).To(Succeed())
 			}
@@ -116,6 +118,9 @@ var _ = Describe("RiakUser Controller", func() {
 					Spec: riakv1.RiakUserSpec{
 						ClusterName: clusterRefName,
 						Username:    "bob",
+						CertificateRef: &riakv1.UserCertificateRef{
+							IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						},
 					},
 				})).To(Succeed())
 			}
@@ -139,209 +144,6 @@ var _ = Describe("RiakUser Controller", func() {
 			u := &riakv1.RiakUser{}
 			Expect(k8sClient.Get(ctx, nn, u)).To(Succeed())
 			Expect(u.Status.Phase).NotTo(Equal(riakv1.UserPhaseFailed))
-		})
-	})
-
-	Context("missing password secret", func() {
-		const userName = "user-bad-secret"
-		const clusterRefName = "user-cluster-ready-for-secret-test"
-		nn := types.NamespacedName{Name: userName, Namespace: ns}
-
-		BeforeEach(func() {
-			// Create a cluster and mark it Ready so the controller proceeds to user creation.
-			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
-			existing := &riakv1.RiakCluster{}
-			if err := k8sClient.Get(ctx, cnn, existing); err != nil && errors.IsNotFound(err) {
-				c := &riakv1.RiakCluster{
-					ObjectMeta: metav1.ObjectMeta{Name: clusterRefName, Namespace: ns},
-					Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
-				}
-				Expect(k8sClient.Create(ctx, c)).To(Succeed())
-				// Force Ready phase in status
-				c.Status.Phase = riakv1.PhaseReady
-				c.Status.Members = []riakv1.RiakNodeMember{{Pod: clusterRefName + "-0", Name: clusterRefName + "-0"}}
-				Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
-			}
-			existingU := &riakv1.RiakUser{}
-			if err := k8sClient.Get(ctx, nn, existingU); err != nil && errors.IsNotFound(err) {
-				Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
-					ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
-					Spec: riakv1.RiakUserSpec{
-						ClusterName: clusterRefName,
-						Username:    "carol",
-						PasswordSecret: &riakv1.PasswordSecretRef{
-							Name: "nonexistent-secret",
-							Key:  "password",
-						},
-					},
-				})).To(Succeed())
-			}
-		})
-
-		AfterEach(func() {
-			cleanupUser(userName)
-			c := &riakv1.RiakCluster{}
-			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
-			if err := k8sClient.Get(ctx, cnn, c); err == nil {
-				_ = k8sClient.Delete(ctx, c)
-				r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
-				_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: cnn})
-			}
-		})
-
-		It("sets status to Failed when password secret is missing", func() {
-			Expect(reconcileUser(ctx, userName, ns)).To(Succeed())
-			// Second reconcile processes the cluster-ready path
-			Expect(reconcileUser(ctx, userName, ns)).To(Succeed())
-
-			u := &riakv1.RiakUser{}
-			Expect(k8sClient.Get(ctx, nn, u)).To(Succeed())
-			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
-			Expect(u.Status.Error).To(ContainSubstring("password secret not found"))
-		})
-	})
-
-	Context("password key not found in secret", func() {
-		const userName = "user-wrong-key"
-		const clusterRefName = "user-cluster-wrongkey"
-		const secretName = "riak-user-secret-wrongkey"
-		nn := types.NamespacedName{Name: userName, Namespace: ns}
-
-		BeforeEach(func() {
-			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
-			existing := &riakv1.RiakCluster{}
-			if err := k8sClient.Get(ctx, cnn, existing); err != nil && errors.IsNotFound(err) {
-				c := &riakv1.RiakCluster{
-					ObjectMeta: metav1.ObjectMeta{Name: clusterRefName, Namespace: ns},
-					Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
-				}
-				Expect(k8sClient.Create(ctx, c)).To(Succeed())
-				c.Status.Phase = riakv1.PhaseReady
-				c.Status.Members = []riakv1.RiakNodeMember{{Pod: clusterRefName + "-0", Name: clusterRefName + "-0"}}
-				Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
-			}
-			snn := types.NamespacedName{Name: secretName, Namespace: ns}
-			existingS := &corev1.Secret{}
-			if err := k8sClient.Get(ctx, snn, existingS); err != nil && errors.IsNotFound(err) {
-				Expect(k8sClient.Create(ctx, &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns},
-					Data:       map[string][]byte{"otherkey": []byte("somevalue")},
-				})).To(Succeed())
-			}
-			existingU := &riakv1.RiakUser{}
-			if err := k8sClient.Get(ctx, nn, existingU); err != nil && errors.IsNotFound(err) {
-				Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
-					ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
-					Spec: riakv1.RiakUserSpec{
-						ClusterName: clusterRefName,
-						Username:    "erroruser",
-						PasswordSecret: &riakv1.PasswordSecretRef{
-							Name: secretName,
-							Key:  "", // empty → defaults to "password", which doesn't exist in the secret
-						},
-					},
-				})).To(Succeed())
-			}
-		})
-
-		AfterEach(func() {
-			cleanupUser(userName)
-			s := &corev1.Secret{}
-			snn := types.NamespacedName{Name: secretName, Namespace: ns}
-			if err := k8sClient.Get(ctx, snn, s); err == nil {
-				_ = k8sClient.Delete(ctx, s)
-			}
-			c := &riakv1.RiakCluster{}
-			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
-			if err := k8sClient.Get(ctx, cnn, c); err == nil {
-				_ = k8sClient.Delete(ctx, c)
-				r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
-				_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: cnn})
-			}
-		})
-
-		It("sets status to Failed when password key is not found in secret", func() {
-			// First reconcile: adds finalizer, initialises status
-			Expect(reconcileUser(ctx, userName, ns)).To(Succeed())
-			// Second reconcile: cluster Ready, secret found, but key missing → Failed
-			Expect(reconcileUser(ctx, userName, ns)).To(Succeed())
-
-			u := &riakv1.RiakUser{}
-			Expect(k8sClient.Get(ctx, nn, u)).To(Succeed())
-			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
-			Expect(u.Status.Error).To(ContainSubstring("password key not found"))
-		})
-	})
-
-	Context("password secret key present", func() {
-		const userName = "user-with-secret"
-		const clusterRefName = "user-cluster-ready-secret-ok"
-		const secretName = "riak-user-secret"
-		nn := types.NamespacedName{Name: userName, Namespace: ns}
-
-		BeforeEach(func() {
-			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
-			existing := &riakv1.RiakCluster{}
-			if err := k8sClient.Get(ctx, cnn, existing); err != nil && errors.IsNotFound(err) {
-				c := &riakv1.RiakCluster{
-					ObjectMeta: metav1.ObjectMeta{Name: clusterRefName, Namespace: ns},
-					Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
-				}
-				Expect(k8sClient.Create(ctx, c)).To(Succeed())
-				c.Status.Phase = riakv1.PhaseReady
-				c.Status.Members = []riakv1.RiakNodeMember{{Pod: clusterRefName + "-0", Name: clusterRefName + "-0"}}
-				Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
-			}
-			snn := types.NamespacedName{Name: secretName, Namespace: ns}
-			existingS := &corev1.Secret{}
-			if err := k8sClient.Get(ctx, snn, existingS); err != nil && errors.IsNotFound(err) {
-				Expect(k8sClient.Create(ctx, &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns},
-					Data:       map[string][]byte{"password": []byte("mysecretpw")},
-				})).To(Succeed())
-			}
-			existingU := &riakv1.RiakUser{}
-			if err := k8sClient.Get(ctx, nn, existingU); err != nil && errors.IsNotFound(err) {
-				Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
-					ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
-					Spec: riakv1.RiakUserSpec{
-						ClusterName: clusterRefName,
-						Username:    "dave",
-						PasswordSecret: &riakv1.PasswordSecretRef{
-							Name: secretName,
-							Key:  "password",
-						},
-					},
-				})).To(Succeed())
-			}
-		})
-
-		AfterEach(func() {
-			cleanupUser(userName)
-			s := &corev1.Secret{}
-			snn := types.NamespacedName{Name: secretName, Namespace: ns}
-			if err := k8sClient.Get(ctx, snn, s); err == nil {
-				_ = k8sClient.Delete(ctx, s)
-			}
-			c := &riakv1.RiakCluster{}
-			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
-			if err := k8sClient.Get(ctx, cnn, c); err == nil {
-				_ = k8sClient.Delete(ctx, c)
-				r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
-				_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: cnn})
-			}
-		})
-
-		It("reads the secret and attempts user creation (fails at kubectl, sets Failed)", func() {
-			Expect(reconcileUser(ctx, userName, ns)).To(Succeed())
-			Expect(reconcileUser(ctx, userName, ns)).To(Succeed())
-
-			u := &riakv1.RiakUser{}
-			Expect(k8sClient.Get(ctx, nn, u)).To(Succeed())
-			// kubectl exec fails (no real cluster) → Failed with "failed to create user"
-			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
-			Expect(u.Status.Error).To(ContainSubstring("failed to create user"))
-			Expect(u.Status.Error).NotTo(ContainSubstring("password secret not found"))
 		})
 	})
 
@@ -401,25 +203,6 @@ var _ = Describe("RiakUser Controller", func() {
 			}
 		}
 
-		It("sets phase to Ready with default password (no PasswordSecret)", func() {
-			const userName = "user-success-default-pw"
-			readyCluster()
-			defer cleanupReadyCluster()
-
-			Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
-				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
-				Spec:       riakv1.RiakUserSpec{ClusterName: clusterRefName, Username: "frank"},
-			})).To(Succeed())
-			defer cleanupUserMock(userName)
-
-			reconcileWithMock(userName)
-
-			u := &riakv1.RiakUser{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, u)).To(Succeed())
-			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseReady))
-			Expect(u.Status.Created).To(BeTrue())
-		})
-
 		It("sets phase to Ready and processes grants", func() {
 			const userName = "user-success-with-grants"
 			readyCluster()
@@ -430,6 +213,9 @@ var _ = Describe("RiakUser Controller", func() {
 				Spec: riakv1.RiakUserSpec{
 					ClusterName: clusterRefName,
 					Username:    "grace",
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+					},
 					Grants: []riakv1.Grant{
 						{Resource: "any", Permission: "read"},
 						{Resource: "bucket", Permission: "write", BucketName: "mydata"},
@@ -455,6 +241,9 @@ var _ = Describe("RiakUser Controller", func() {
 				Spec: riakv1.RiakUserSpec{
 					ClusterName: clusterRefName,
 					Username:    "heidi",
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+					},
 					Grants: []riakv1.Grant{
 						{Resource: "bucket", Permission: "write", BucketName: "e2e"},
 					},
@@ -494,7 +283,13 @@ var _ = Describe("RiakUser Controller", func() {
 			By("creating and reconciling the user")
 			Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
 				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
-				Spec:       riakv1.RiakUserSpec{ClusterName: "some-cluster", Username: "eve"},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: "some-cluster",
+					Username:    "eve",
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+					},
+				},
 			})).To(Succeed())
 			Expect(reconcileUser(ctx, userName, ns)).To(Succeed())
 
@@ -559,28 +354,11 @@ var _ = Describe("RiakUser Controller", func() {
 			userName := "user-sfail-no-cluster"
 			u := &riakv1.RiakUser{
 				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
-				Spec:       riakv1.RiakUserSpec{ClusterName: "missing-cluster", Username: "alice"},
-			}
-			Expect(k8sClient.Create(ctx, u)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, u) })
-			initStatus(u)
-			Expect(reconcileWith(newFailStatusClient(), userName)).To(Succeed())
-		})
-
-		It("logs update error when password secret not found", func() {
-			clusterName := "user-sfail-no-secret-c"
-			userName := "user-sfail-no-secret"
-			c := makeReadyCluster(clusterName)
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
-
-			u := &riakv1.RiakUser{
-				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
 				Spec: riakv1.RiakUserSpec{
-					ClusterName: clusterName,
-					Username:    "bob",
-					PasswordSecret: &riakv1.PasswordSecretRef{
-						Name: "missing-secret",
-						Key:  "password",
+					ClusterName: "missing-cluster",
+					Username:    "alice",
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 				},
 			}
@@ -590,37 +368,7 @@ var _ = Describe("RiakUser Controller", func() {
 			Expect(reconcileWith(newFailStatusClient(), userName)).To(Succeed())
 		})
 
-		It("logs update error when password key not found in secret", func() {
-			clusterName := "user-sfail-bad-key-c"
-			userName := "user-sfail-bad-key"
-			c := makeReadyCluster(clusterName)
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, c) })
-
-			secret := &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: "sfail-bad-key-secret", Namespace: ns},
-				Data:       map[string][]byte{"otherkey": []byte("value")},
-			}
-			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, secret) })
-
-			u := &riakv1.RiakUser{
-				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
-				Spec: riakv1.RiakUserSpec{
-					ClusterName: clusterName,
-					Username:    "carol",
-					PasswordSecret: &riakv1.PasswordSecretRef{
-						Name: "sfail-bad-key-secret",
-						Key:  "password",
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, u)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(ctx, u) })
-			initStatus(u)
-			Expect(reconcileWith(newFailStatusClient(), userName)).To(Succeed())
-		})
-
-		It("logs update error when CreateUser fails", func() {
+		It("logs update error when cert-auth user creation fails", func() {
 			clusterName := "user-sfail-create-c"
 			userName := "user-sfail-create"
 			c := makeReadyCluster(clusterName)
@@ -628,7 +376,13 @@ var _ = Describe("RiakUser Controller", func() {
 
 			u := &riakv1.RiakUser{
 				ObjectMeta: metav1.ObjectMeta{Name: userName, Namespace: ns},
-				Spec:       riakv1.RiakUserSpec{ClusterName: clusterName, Username: "dave"},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: clusterName,
+					Username:    "dave",
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+					},
+				},
 			}
 			Expect(k8sClient.Create(ctx, u)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, u) })

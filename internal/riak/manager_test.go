@@ -95,37 +95,6 @@ func TestCreateBucketType_withMember(t *testing.T) {
 	}
 }
 
-// ---------- CreateUser ----------
-
-func TestCreateUser_noMembers(t *testing.T) {
-	m := newManager(func(_ context.Context, _ string, _ ...string) (string, error) {
-		return "", nil
-	})
-	err := m.CreateUser(context.Background(), emptyCluster(), "alice", "pass")
-	if err == nil || !strings.Contains(err.Error(), "no cluster members") {
-		t.Fatalf("expected 'no cluster members' error, got: %v", err)
-	}
-}
-
-func TestCreateUser_withMember(t *testing.T) {
-	runner, calls := mockRunner(map[string]string{"security": ""}, nil)
-	m := newManager(runner)
-
-	err := m.CreateUser(context.Background(), clusterWithMembers("pod-0"), "alice", "secret")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	var sawAddUser bool
-	for _, c := range *calls {
-		if strings.Contains(strings.Join(c.args, " "), "add-user alice") {
-			sawAddUser = true
-		}
-	}
-	if !sawAddUser {
-		t.Error("expected add-user alice to be called")
-	}
-}
-
 // ---------- GrantUserPermission ----------
 
 func TestGrantUserPermission_noMembers(t *testing.T) {

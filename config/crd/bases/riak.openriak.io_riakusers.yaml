@@ -41,8 +41,10 @@ spec:
             properties:
               certificateRef:
                 description: |-
-                  CertificateRef enables mTLS client authentication via a cert-manager Certificate.
-                  When set, passwordSecret is ignored; Riak authenticates this user by client certificate.
+                  CertificateRef configures mTLS client-certificate authentication via cert-manager.
+                  It is required: users always authenticate by client certificate (password auth is
+                  not supported). Riak authenticates the user by the certificate's CommonName, which
+                  the operator sets to spec.username.
                 properties:
                   issuerRef:
                     description: IssuerRef references the cert-manager Issuer or ClusterIssuer
@@ -103,25 +105,12 @@ spec:
                   - resource
                   type: object
                 type: array
-              passwordSecret:
-                description: |-
-                  Password is the user password (stored in a Secret).
-                  PasswordSecret references a Secret containing the password.
-                properties:
-                  key:
-                    description: Key is the key in the Secret containing the password.
-                    type: string
-                  name:
-                    description: Name is the Secret name.
-                    type: string
-                required:
-                - name
-                type: object
               username:
                 description: Username is the username.
                 minLength: 1
                 type: string
             required:
+            - certificateRef
             - clusterName
             - username
             type: object
