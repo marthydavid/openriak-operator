@@ -115,8 +115,20 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	manager := riak.NewManager(executor, r.Client, log)
 
-	// Users authenticate by client certificate only; certificateRef is enforced
-	// as required by the CRD, so no nil check is needed here.
+	// certificateRef is required by the CRD, but admission validation only
+	// applies to new writes — RiakUsers stored before the field became required
+	// can still lack it. Fail those explicitly instead of panicking.
+	if user.Spec.CertificateRef == nil {
+		user.Status.Phase = riakv1.UserPhaseFailed
+		user.Status.Error = "certificateRef is required: password authentication was removed; " +
+			"recreate the user with spec.certificateRef"
+		user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+		if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+			log.Error(updateErr, "failed to update user status")
+		}
+		return ctrl.Result{}, nil
+	}
+
 	// Create the cert-manager Certificate for the user's client certificate.
 	if err := r.reconcileUserCertificate(ctx, user); err != nil {
 		log.Error(err, "failed to reconcile user certificate")
@@ -140,7 +152,7 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if err := manager.AddSecuritySource(ctx, cluster, user.Spec.Username, "certificate"); err != nil {
+	if err := manager.AddSecuritySource(ctx, cluster, user.Spec.Username); err != nil {
 		log.Error(err, "failed to set certificate security source", "user", user.Spec.Username)
 		user.Status.Phase = riakv1.UserPhaseFailed
 		user.Status.Error = fmt.Sprintf("failed to set security source: %v", err)

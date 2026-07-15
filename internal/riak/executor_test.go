@@ -454,28 +454,16 @@ func TestAddSecuritySource_sendsCorrectArgs(t *testing.T) {
 	runner, calls := mockRunner(map[string]string{"security add-source": ""}, nil)
 	e := newTestExecutor(runner)
 
-	if err := e.AddSecuritySource(context.Background(), "ns", "pod", "riak", "alice", "certificate"); err != nil {
+	if err := e.AddSecuritySource(context.Background(), "ns", "pod", "riak", "alice"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if len(*calls) != 1 {
 		t.Fatalf("expected 1 call, got %d", len(*calls))
 	}
+	// certificate is the only security source the executor can emit
 	joined := strings.Join((*calls)[0].args, " ")
 	if !strings.Contains(joined, "security add-source alice 0.0.0.0/0 certificate") {
-		t.Errorf("unexpected args: %s", joined)
-	}
-}
-
-func TestAddSecuritySource_passesSourceTypeThrough(t *testing.T) {
-	runner, calls := mockRunner(map[string]string{"security add-source": ""}, nil)
-	e := newTestExecutor(runner)
-
-	if err := e.AddSecuritySource(context.Background(), "ns", "pod", "riak", "bob", "password"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	joined := strings.Join((*calls)[0].args, " ")
-	if !strings.Contains(joined, "add-source bob 0.0.0.0/0 password") {
 		t.Errorf("unexpected args: %s", joined)
 	}
 }
@@ -484,7 +472,7 @@ func TestAddSecuritySource_propagatesError(t *testing.T) {
 	runner, _ := mockRunner(nil, map[string]error{"add-source": errors.New("source failed")})
 	e := newTestExecutor(runner)
 
-	err := e.AddSecuritySource(context.Background(), "ns", "pod", "riak", "alice", "certificate")
+	err := e.AddSecuritySource(context.Background(), "ns", "pod", "riak", "alice")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

@@ -149,11 +149,12 @@ func (e *Executor) CreateUserForCert(ctx context.Context, namespace, podName, co
 	return err
 }
 
-// AddSecuritySource configures how a Riak user authenticates.
-// The operator always uses the "certificate" source (mTLS client cert, CN == username).
-func (e *Executor) AddSecuritySource(ctx context.Context, namespace, podName, containerName, username, sourceType string) error {
+// AddSecuritySource registers the certificate security source for a user:
+// mTLS client certificates (CN == username) are the only authentication mode,
+// so the source is not caller-selectable.
+func (e *Executor) AddSecuritySource(ctx context.Context, namespace, podName, containerName, username string) error {
 	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName,
-		"security", "add-source", username, "0.0.0.0/0", sourceType)
+		"security", "add-source", username, "0.0.0.0/0", "certificate")
 	return err
 }
 

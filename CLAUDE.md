@@ -132,7 +132,7 @@ The controller's fallback image (when `spec.image` is omitted) is `ghcr.io/marth
 |---------|--------------|
 | Command injection via kubectl exec | `executor.go` uses `exec.CommandContext` with argument array — no shell is invoked; metacharacters are literal |
 | `RIAK_CONFIG_*` env var injection | Requires Kubernetes RBAC write access to RiakCluster; env vars are a trusted boundary |
-| Config key-value logging in `SetConfig` | Only logs Riak node config params; no credentials exist — users authenticate by client certificate only |
+| Config key-value logging in `SetConfig` | Logged Riak node config params contain no credential material; authentication uses mTLS client certificates, which never pass through `SetConfig` |
 
 ### Resolved: hardcoded default password
 
