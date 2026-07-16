@@ -582,17 +582,12 @@ var _ = Describe("RiakUser Controller", func() {
 				Spec:   riakv1.RiakUserSpec{ClusterName: "legacy-cluster", Username: "legacy"},
 				Status: riakv1.RiakUserStatus{Phase: riakv1.UserPhaseCreating},
 			}
-			cluster := &riakv1.RiakCluster{
-				ObjectMeta: metav1.ObjectMeta{Name: "legacy-cluster", Namespace: ns},
-				Status: riakv1.RiakClusterStatus{
-					Phase:   riakv1.PhaseReady,
-					Members: []riakv1.RiakNodeMember{{Pod: "legacy-cluster-0", Name: "legacy-cluster-0"}},
-				},
-			}
+			// No cluster object on purpose: the guard must reach the terminal
+			// Failed state before any cluster dependency is resolved.
 			fc := fake.NewClientBuilder().
 				WithScheme(k8sClient.Scheme()).
-				WithStatusSubresource(&riakv1.RiakUser{}, &riakv1.RiakCluster{}).
-				WithObjects(legacy, cluster).
+				WithStatusSubresource(&riakv1.RiakUser{}).
+				WithObjects(legacy).
 				Build()
 
 			noop := func(_ context.Context, _ string, _ ...string) (string, error) { return "", nil }

@@ -5,9 +5,10 @@ cluster end to end:
 
 1. **Cluster TLS** — the operator requests a server certificate for every node in a
    `RiakCluster` and configures Riak's HTTPS listener with it.
-2. **mTLS client authentication** — a `RiakUser` can authenticate with a client
-   certificate instead of a password. The operator requests the client certificate
-   from cert-manager and registers the user with Riak's `certificate` security source.
+2. **mTLS client authentication** — every `RiakUser` authenticates with a client
+   certificate; it is the only supported mode. The operator requests the client
+   certificate from cert-manager and registers the user with Riak's `certificate`
+   security source.
 
 The operator never generates keys or runs its own CA; issuance and renewal are fully
 delegated to cert-manager.

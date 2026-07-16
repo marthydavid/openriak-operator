@@ -88,6 +88,24 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
+	// certificateRef is required by the CRD, but admission validation only
+	// applies to new writes — RiakUsers stored before the field became required
+	// can still lack it. Fail those explicitly instead of panicking, and do so
+	// before any cluster dependency so the terminal state is reached even when
+	// the referenced cluster is missing or not Ready. A failed status write is
+	// returned so the update is retried rather than leaving the user Creating.
+	if user.Spec.CertificateRef == nil {
+		user.Status.Phase = riakv1.UserPhaseFailed
+		user.Status.Error = "certificateRef is required: password authentication was removed; " +
+			"recreate the user with spec.certificateRef"
+		user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+		if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+			log.Error(updateErr, "failed to update user status")
+			return ctrl.Result{}, updateErr
+		}
+		return ctrl.Result{}, nil
+	}
+
 	// Get the cluster
 	cluster := &riakv1.RiakCluster{}
 	if err := r.Get(ctx, client.ObjectKey{
@@ -114,20 +132,6 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		executor = riak.NewExecutor(log)
 	}
 	manager := riak.NewManager(executor, r.Client, log)
-
-	// certificateRef is required by the CRD, but admission validation only
-	// applies to new writes — RiakUsers stored before the field became required
-	// can still lack it. Fail those explicitly instead of panicking.
-	if user.Spec.CertificateRef == nil {
-		user.Status.Phase = riakv1.UserPhaseFailed
-		user.Status.Error = "certificateRef is required: password authentication was removed; " +
-			"recreate the user with spec.certificateRef"
-		user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
-		if updateErr := r.Status().Update(ctx, user); updateErr != nil {
-			log.Error(updateErr, "failed to update user status")
-		}
-		return ctrl.Result{}, nil
-	}
 
 	// Create the cert-manager Certificate for the user's client certificate.
 	if err := r.reconcileUserCertificate(ctx, user); err != nil {
