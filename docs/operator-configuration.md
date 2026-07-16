@@ -23,8 +23,11 @@ The image for Riak pods is resolved in this order:
 2. The operator's `--riak-image` flag
 3. The built-in default (`ghcr.io/marthydavid/riak:3.2.6`)
 
-Published operand variants: `riak:3.2.6` (UBI8/el8, OTP24 — the default) and
-`riak:3.4.0` (UBI9/el9, OTP26). Either works with `--riak-image` or `spec.image`.
+Published operand variants: `riak:3.0.16` and `riak:3.2.6` (the default) are multi-arch
+(amd64 + arm64); `riak:3.4.0` is amd64-only — upstream's only aarch64 RPMs for 3.4 target
+graviton3/SVE and crash on generic arm64 CPUs. Minor aliases `3.0`/`3.2`/`3.4` exist. amd64
+images are RHEL-UBI-based; arm64 images use Amazon Linux with upstream's Graviton builds.
+Any of them works with `--riak-image` or `spec.image`.
 
 Use `--riak-image` to pin the fleet-wide default — for example an internal registry
 mirror — without editing every `RiakCluster`:
