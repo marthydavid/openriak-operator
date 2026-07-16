@@ -24,32 +24,36 @@ jobs:
     strategy:
       fail-fast: false
       # One entry per supported minor (latest patch). Upstream's layout is
-      # irregular across versions, so each entry carries its full RPM URLs:
-      # amd64 = RHEL x86_64, arm64 = Amazon Linux Graviton aarch64 (the only
-      # arm64 builds upstream publishes). 3.0.18 exists but is ubuntu-only,
-      # hence 3.0.16.
+      # irregular across versions, so each entry carries full package URLs:
+      # amd64 = RHEL x86_64 RPM; arm64 = Amazon Linux Graviton RPM where the
+      # build is SVE-free, otherwise the generic Ubuntu arm64 deb (3.4.0's
+      # only Graviton build targets graviton3/SVE and SIGILLs on non-SVE
+      # arm64 CPUs). 3.0.18 exists but is ubuntu-only, hence 3.0.16.
       matrix:
         include:
           - riak_version: "3.0.16"
             riak_minor: "3.0"
             rhel_version: "8"
             amzn_version: "2"
-            amd64_rpm: "https://files.tiot.jp/riak/kv/3.0/3.0.16/rhel/8/riak-3.0.16.OTP22.3-1.el8.x86_64.rpm"
-            arm64_rpm: "https://files.tiot.jp/riak/kv/3.0/3.0.16/amazon/2%20(graviton%203)/riak-3.0.16.tiot.graviton3.OTP22-1.amzn2.aarch64.rpm"
+            arm64_variant: "rpm"
+            amd64_pkg: "https://files.tiot.jp/riak/kv/3.0/3.0.16/rhel/8/riak-3.0.16.OTP22.3-1.el8.x86_64.rpm"
+            arm64_pkg: "https://files.tiot.jp/riak/kv/3.0/3.0.16/amazon/2%20(graviton%203)/riak-3.0.16.tiot.graviton3.OTP22-1.amzn2.aarch64.rpm"
             is_default: false
           - riak_version: "3.2.6"
             riak_minor: "3.2"
             rhel_version: "8"
             amzn_version: "2023"
-            amd64_rpm: "https://files.tiot.jp/riak/kv/3.2/3.2.6/rhel/8/riak-3.2.6.OTP24-1.el8.x86_64.rpm"
-            arm64_rpm: "https://files.tiot.jp/riak/kv/3.2/3.2.6/amazon/2023%20(graviton%202)/riak-3.2.6.OTP24-1.amzn2023.aarch64.rpm"
+            arm64_variant: "rpm"
+            amd64_pkg: "https://files.tiot.jp/riak/kv/3.2/3.2.6/rhel/8/riak-3.2.6.OTP24-1.el8.x86_64.rpm"
+            arm64_pkg: "https://files.tiot.jp/riak/kv/3.2/3.2.6/amazon/2023%20(graviton%202)/riak-3.2.6.OTP24-1.amzn2023.aarch64.rpm"
             is_default: true
           - riak_version: "3.4.0"
             riak_minor: "3.4"
             rhel_version: "9"
             amzn_version: "2023"
-            amd64_rpm: "https://files.tiot.jp/riak/kv/3.4/3.4.0/rhel/9/riak-3.4.0.OTP26-1.el9.x86_64.rpm"
-            arm64_rpm: "https://files.tiot.jp/riak/kv/3.4/3.4.0/amazon/2023%20(graviton3)/riak-3.4.0.OTP26-1.amzn2023.aarch64.rpm"
+            arm64_variant: "deb"
+            amd64_pkg: "https://files.tiot.jp/riak/kv/3.4/3.4.0/rhel/9/riak-3.4.0.OTP26-1.el9.x86_64.rpm"
+            arm64_pkg: "https://files.tiot.jp/riak/kv/3.4/3.4.0/ubuntu/noble64/riak_3.4.0-OTP26_arm64.deb"
             is_default: false
     steps:
       - name: Checkout
@@ -91,7 +95,8 @@ jobs:
           build-args: |
             RHEL_VERSION=${{ matrix.rhel_version }}
             AMZN_VERSION=${{ matrix.amzn_version }}
-            AMD64_RPM_URL=${{ matrix.amd64_rpm }}
-            ARM64_RPM_URL=${{ matrix.arm64_rpm }}
+            ARM64_VARIANT=${{ matrix.arm64_variant }}
+            AMD64_RPM_URL=${{ matrix.amd64_pkg }}
+            ARM64_PKG_URL=${{ matrix.arm64_pkg }}
           cache-from: type=gha,scope=riak-${{ matrix.riak_version }}
           cache-to: type=gha,mode=max,scope=riak-${{ matrix.riak_version }}

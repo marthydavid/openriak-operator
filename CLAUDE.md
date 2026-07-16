@@ -99,13 +99,16 @@ All images are published to **GitHub Container Registry** under `ghcr.io/marthyd
 | Operator | `ghcr.io/marthydavid/openriak-operator:<tag>` | Go 1.22 / alpine |
 | Riak KV 3.0 | `ghcr.io/marthydavid/riak:3.0.16` (alias `3.0`) | amd64: UBI8/el8 OTP22.3; arm64: AL2/graviton3 OTP22 |
 | Riak KV 3.2 (default, `latest`) | `ghcr.io/marthydavid/riak:3.2.6` (alias `3.2`) | amd64: UBI8/el8 OTP24; arm64: AL2023/graviton2 OTP24 |
-| Riak KV 3.4 | `ghcr.io/marthydavid/riak:3.4.0` (alias `3.4`) | amd64: UBI9/el9 OTP26; arm64: AL2023/graviton3 OTP26 |
+| Riak KV 3.4 | `ghcr.io/marthydavid/riak:3.4.0` (alias `3.4`) | amd64: UBI9/el9 OTP26; arm64: Ubuntu 24.04 deb OTP26 (the graviton3 RPM uses SVE → SIGILL on non-SVE arm64) |
 
 The Riak image is built from `images/riak/Dockerfile`, **multi-arch**: amd64 uses a Red Hat UBI
 base with the RHEL x86_64 RPM, arm64 uses an Amazon Linux base with the Graviton aarch64 RPM
-(the only arm64 builds upstream publishes; installed `--nodeps` with a bundled-ERTS escript
-symlink). RPM URLs are irregular across versions, so each published version carries full URLs
-in the build-riak workflow matrix. 3.0.18 is ubuntu-only upstream, hence 3.0.16.
+(installed `--nodeps` with a bundled-ERTS escript symlink) — except where only graviton3/SVE
+RPMs exist (3.4.0): those SIGILL on non-SVE arm64 CPUs (Apple Silicon, Ampere, Graviton2), so
+the generic Ubuntu arm64 deb is used instead. Package URLs are irregular across versions, so
+each published version carries full URLs in the build-riak workflow matrix. 3.0.18 is
+ubuntu-only upstream, hence 3.0.16. amzn2 (3.0.x arm64) needs openssl11-libs for the
+libcrypto.so.1.1 the Graviton build links.
 The operator image is built from the root `Dockerfile` (multi-arch amd64+arm64).
 
 Build locally:
