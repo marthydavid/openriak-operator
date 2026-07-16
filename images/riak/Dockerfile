@@ -1,40 +1,66 @@
-# Riak KV container image on Red Hat Universal Base Image.
+# Riak KV container image, multi-arch.
 # RPM source: https://files.tiot.jp/riak/kv/
 #
-# Build args select the Riak release and matching RHEL base. Upstream ships
-# each release for specific RHEL majors only (3.2.x: el8; 3.4.x: el9 with
-# OTP26), so RHEL_VERSION and RIAK_OTP must match the chosen RIAK_VERSION —
-# see .github/workflows/build-riak.yml for the published combinations.
+# Upstream ships x86_64 RPMs for RHEL and aarch64 RPMs only as Amazon Linux
+# Graviton builds, so the two architectures use different bases:
+#   amd64 -> Red Hat UBI + el RPM (EPEL provides the erlang-erts dependency)
+#   arm64 -> Amazon Linux + Graviton RPM (installed --nodeps: the escript
+#            dependency is unsatisfiable there; Riak bundles its own ERTS)
 #
-#   3.2.6 (default): --build-arg RIAK_SERIES=3.2 RIAK_VERSION=3.2.6 RIAK_OTP=OTP24 RHEL_VERSION=8
-#   3.4.0:           --build-arg RIAK_SERIES=3.4 RIAK_VERSION=3.4.0 RIAK_OTP=OTP26 RHEL_VERSION=9
+# RPM URLs are passed whole because upstream's layout is irregular across
+# versions (el8 vs el9, amzn2 vs amzn2023, three spellings of the graviton
+# directory). The published version/URL combinations live in the build-riak
+# workflow matrix. Defaults build the 3.2.6 flagship.
 
 ARG RHEL_VERSION=8
+ARG AMZN_VERSION=2023
 
-FROM registry.access.redhat.com/ubi${RHEL_VERSION}/ubi AS base
+# ── amd64: Red Hat UBI ────────────────────────────────────────────────────────
+FROM registry.access.redhat.com/ubi${RHEL_VERSION}/ubi AS base-amd64
 
 ARG RHEL_VERSION
-ARG RIAK_SERIES=3.2
-ARG RIAK_VERSION=3.2.6
-ARG RIAK_OTP=OTP24
-ARG RIAK_ARCH=x86_64
-ARG RIAK_RPM_URL=https://files.tiot.jp/riak/kv/${RIAK_SERIES}/${RIAK_VERSION}/rhel/${RHEL_VERSION}/riak-${RIAK_VERSION}.${RIAK_OTP}-1.el${RHEL_VERSION}.${RIAK_ARCH}.rpm
+ARG AMD64_RPM_URL=https://files.tiot.jp/riak/kv/3.2/3.2.6/rhel/8/riak-3.2.6.OTP24-1.el8.x86_64.rpm
 
-# Enable EPEL to satisfy the /usr/bin/escript dependency declared by the
-# Riak RPM spec (provided by erlang-erts).  Riak bundles its own OTP
-# runtime; erlang-erts is only needed to satisfy the RPM dependency check.
-# procps-ng: provides `ps`, used by riak startup scripts.
+# EPEL satisfies the /usr/bin/escript dependency declared by the Riak RPM spec
+# (provided by erlang-erts). Riak bundles its own OTP runtime; erlang-erts is
+# only needed for the RPM dependency check. procps-ng: `ps` for riak scripts.
 RUN dnf install -y \
         "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${RHEL_VERSION}.noarch.rpm" \
     && dnf install -y \
         procps-ng \
         erlang-erts \
-    && dnf install -y "${RIAK_RPM_URL}" \
+    && curl -fsSLo /tmp/riak.rpm "${AMD64_RPM_URL}" \
+    && dnf install -y /tmp/riak.rpm \
+    && rm -f /tmp/riak.rpm \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
-# Ensure directories are writable by the riak user created by the RPM.
-# The RPM sets these up, but explicit chown guards against image layer ordering issues.
+# ── arm64: Amazon Linux (only arm64 Riak builds published upstream) ──────────
+FROM amazonlinux:${AMZN_VERSION} AS base-arm64
+
+ARG ARM64_RPM_URL=https://files.tiot.jp/riak/kv/3.2/3.2.6/amazon/2023%20(graviton%202)/riak-3.2.6.OTP24-1.amzn2023.aarch64.rpm
+
+# yum works on both amzn2 (real yum) and amzn2023 (dnf alias).
+# shadow-utils: useradd; the riak user is pre-created so the RPM %pre is a
+# no-op regardless of version. --nodeps: no erlang packages exist here to
+# satisfy the escript dependency; the bundled ERTS provides it (symlinked).
+# amzn2 ships OpenSSL 1.0 but the Graviton Riak builds link libcrypto.so.1.1,
+# provided there by the openssl11-libs package (already OpenSSL 3 on amzn2023).
+RUN yum install -y procps-ng shadow-utils hostname findutils tar gzip \
+    && if [ "$(rpm -E '%{amzn}')" = "2" ]; then yum install -y openssl11-libs; fi \
+    && yum clean all \
+    && groupadd -r riak \
+    && useradd -r -g riak -d /var/lib/riak -s /sbin/nologin riak \
+    && curl -fsSLo /tmp/riak.rpm "${ARM64_RPM_URL}" \
+    && rpm -ivh --nodeps /tmp/riak.rpm \
+    && rm -f /tmp/riak.rpm \
+    && ln -sf /usr/lib64/riak/erts-*/bin/escript /usr/bin/escript
+
+# ── common ────────────────────────────────────────────────────────────────────
+ARG TARGETARCH
+FROM base-${TARGETARCH}
+
+# Ensure directories are writable by the riak user.
 # /var/run/riak is the hardcoded PID_DIR used by `riak start` (daemon mode) and is
 # not creatable by the non-root riak user at runtime, so pre-create it here.
 RUN mkdir -p /var/run/riak \

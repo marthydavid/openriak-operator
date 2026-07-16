@@ -19,27 +19,44 @@ permissions:
 
 jobs:
   build:
-    name: Build and push ${{ matrix.riak_version }} (el${{ matrix.rhel_version }})
+    name: Build and push ${{ matrix.riak_version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # Upstream ships each Riak release for specific RHEL majors only;
-      # series/OTP/RHEL must match the version (see images/riak/Dockerfile).
+      # One entry per supported minor (latest patch). Upstream's layout is
+      # irregular across versions, so each entry carries its full RPM URLs:
+      # amd64 = RHEL x86_64, arm64 = Amazon Linux Graviton aarch64 (the only
+      # arm64 builds upstream publishes). 3.0.18 exists but is ubuntu-only,
+      # hence 3.0.16.
       matrix:
         include:
-          - riak_series: "3.2"
-            riak_version: "3.2.6"
-            riak_otp: OTP24
+          - riak_version: "3.0.16"
+            riak_minor: "3.0"
             rhel_version: "8"
+            amzn_version: "2"
+            amd64_rpm: "https://files.tiot.jp/riak/kv/3.0/3.0.16/rhel/8/riak-3.0.16.OTP22.3-1.el8.x86_64.rpm"
+            arm64_rpm: "https://files.tiot.jp/riak/kv/3.0/3.0.16/amazon/2%20(graviton%203)/riak-3.0.16.tiot.graviton3.OTP22-1.amzn2.aarch64.rpm"
+            is_default: false
+          - riak_version: "3.2.6"
+            riak_minor: "3.2"
+            rhel_version: "8"
+            amzn_version: "2023"
+            amd64_rpm: "https://files.tiot.jp/riak/kv/3.2/3.2.6/rhel/8/riak-3.2.6.OTP24-1.el8.x86_64.rpm"
+            arm64_rpm: "https://files.tiot.jp/riak/kv/3.2/3.2.6/amazon/2023%20(graviton%202)/riak-3.2.6.OTP24-1.amzn2023.aarch64.rpm"
             is_default: true
-          - riak_series: "3.4"
-            riak_version: "3.4.0"
-            riak_otp: OTP26
+          - riak_version: "3.4.0"
+            riak_minor: "3.4"
             rhel_version: "9"
+            amzn_version: "2023"
+            amd64_rpm: "https://files.tiot.jp/riak/kv/3.4/3.4.0/rhel/9/riak-3.4.0.OTP26-1.el9.x86_64.rpm"
+            arm64_rpm: "https://files.tiot.jp/riak/kv/3.4/3.4.0/amazon/2023%20(graviton3)/riak-3.4.0.OTP26-1.amzn2023.aarch64.rpm"
             is_default: false
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Set up QEMU (arm64 cross-build)
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -59,6 +76,7 @@ jobs:
           images: ghcr.io/marthydavid/riak
           tags: |
             type=raw,value=${{ matrix.riak_version }}
+            type=raw,value=${{ matrix.riak_minor }}
             # `latest` follows the default (3.2.x) variant on main only.
             type=raw,value=latest,enable=${{ matrix.is_default && github.ref == 'refs/heads/main' }}
 
@@ -66,15 +84,14 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: images/riak
-          # Riak RPMs are x86_64 only; no arm64 build available from tiot.jp
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            RIAK_SERIES=${{ matrix.riak_series }}
-            RIAK_VERSION=${{ matrix.riak_version }}
-            RIAK_OTP=${{ matrix.riak_otp }}
             RHEL_VERSION=${{ matrix.rhel_version }}
+            AMZN_VERSION=${{ matrix.amzn_version }}
+            AMD64_RPM_URL=${{ matrix.amd64_rpm }}
+            ARM64_RPM_URL=${{ matrix.arm64_rpm }}
           cache-from: type=gha,scope=riak-${{ matrix.riak_version }}
           cache-to: type=gha,mode=max,scope=riak-${{ matrix.riak_version }}

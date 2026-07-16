@@ -131,7 +131,8 @@ spec:
   size: 3
 
   # Container image (optional; defaults to ghcr.io/marthydavid/riak:3.2.6).
-  # ghcr.io/marthydavid/riak:3.4.0 (RHEL 9 / UBI9 base) is also published.
+  # Published multi-arch (amd64+arm64) variants: 3.0.16, 3.2.6, 3.4.0
+  # (minor aliases 3.0 / 3.2 / 3.4 also exist).
   image: ghcr.io/marthydavid/riak:3.2.6
   imagePullPolicy: IfNotPresent
 

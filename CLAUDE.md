@@ -97,13 +97,15 @@ All images are published to **GitHub Container Registry** under `ghcr.io/marthyd
 | Image | Registry path | Base |
 |-------|--------------|------|
 | Operator | `ghcr.io/marthydavid/openriak-operator:<tag>` | Go 1.22 / alpine |
-| Riak KV 3.2 (default, `latest`) | `ghcr.io/marthydavid/riak:3.2.6` | UBI8 (el8 RPM, OTP24) — amd64 only |
-| Riak KV 3.4 | `ghcr.io/marthydavid/riak:3.4.0` | UBI9 (el9 RPM, OTP26) — amd64 only |
+| Riak KV 3.0 | `ghcr.io/marthydavid/riak:3.0.16` (alias `3.0`) | amd64: UBI8/el8 OTP22.3; arm64: AL2/graviton3 OTP22 |
+| Riak KV 3.2 (default, `latest`) | `ghcr.io/marthydavid/riak:3.2.6` (alias `3.2`) | amd64: UBI8/el8 OTP24; arm64: AL2023/graviton2 OTP24 |
+| Riak KV 3.4 | `ghcr.io/marthydavid/riak:3.4.0` (alias `3.4`) | amd64: UBI9/el9 OTP26; arm64: AL2023/graviton3 OTP26 |
 
-The Riak image is built from `images/riak/Dockerfile`, parameterized by build args
-(`RIAK_SERIES`/`RIAK_VERSION`/`RIAK_OTP`/`RHEL_VERSION`) because upstream ships each release for
-specific RHEL majors only, and publishes x86_64 RPMs only — both Riak images are amd64-only
-(no arm64 variant exists upstream). The published combinations live in the build-riak workflow matrix.
+The Riak image is built from `images/riak/Dockerfile`, **multi-arch**: amd64 uses a Red Hat UBI
+base with the RHEL x86_64 RPM, arm64 uses an Amazon Linux base with the Graviton aarch64 RPM
+(the only arm64 builds upstream publishes; installed `--nodeps` with a bundled-ERTS escript
+symlink). RPM URLs are irregular across versions, so each published version carries full URLs
+in the build-riak workflow matrix. 3.0.18 is ubuntu-only upstream, hence 3.0.16.
 The operator image is built from the root `Dockerfile` (multi-arch amd64+arm64).
 
 Build locally:
@@ -123,7 +125,7 @@ make docker-push  IMG=ghcr.io/marthydavid/openriak-operator:dev
 | Build Riak Image | `.github/workflows/build-riak.yml` | push `main`/tags `riak-*` when `images/riak/**` changes, PRs | `ghcr.io/marthydavid/riak` |
 
 Operator tags: semver on `v*` tags, short-SHA on every push, `latest` on `main`.  
-Riak tags: one per matrix entry (`3.2.6`, `3.4.0`); `latest` follows the 3.2.x default on `main`.  
+Riak tags: patch + minor alias per matrix entry (`3.0.16`/`3.0`, `3.2.6`/`3.2`, `3.4.0`/`3.4`); `latest` follows the 3.2.x default on `main`.  
 PRs build but do **not** push (no registry credentials needed).
 
 The controller's fallback image (when `spec.image` is omitted) is `ghcr.io/marthydavid/riak:3.2.6`.
