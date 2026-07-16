@@ -159,7 +159,7 @@ func TestManagerAddSecuritySource_noMembers(t *testing.T) {
 	m := newManager(func(_ context.Context, _ string, _ ...string) (string, error) {
 		return "", nil
 	})
-	err := m.AddSecuritySource(context.Background(), emptyCluster(), "certuser", "certificate")
+	err := m.AddSecuritySource(context.Background(), emptyCluster(), "certuser")
 	if err == nil || !strings.Contains(err.Error(), "no cluster members") {
 		t.Fatalf("expected 'no cluster members' error, got: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestManagerAddSecuritySource_withMember(t *testing.T) {
 	runner, calls := mockRunner(map[string]string{"security add-source": ""}, nil)
 	m := newManager(runner)
 
-	err := m.AddSecuritySource(context.Background(), clusterWithMembers("pod-0"), "certuser", "certificate")
+	err := m.AddSecuritySource(context.Background(), clusterWithMembers("pod-0"), "certuser")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

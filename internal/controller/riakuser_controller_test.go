@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -564,6 +565,47 @@ var _ = Describe("RiakUser Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, u)).To(Succeed())
 			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
 			Expect(u.Status.Error).To(ContainSubstring("failed to set security source"))
+		})
+	})
+
+	Context("legacy object without certificateRef", func() {
+		It("sets phase to Failed instead of panicking", func() {
+			// The CRD rejects such objects at admission now, but RiakUsers stored
+			// before certificateRef became required can still lack it. envtest's
+			// API server enforces the CRD, so build the legacy state with a fake
+			// client to bypass admission.
+			legacy := &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "legacy-user", Namespace: ns,
+					Finalizers: []string{riakUserFinalizerName},
+				},
+				Spec:   riakv1.RiakUserSpec{ClusterName: "legacy-cluster", Username: "legacy"},
+				Status: riakv1.RiakUserStatus{Phase: riakv1.UserPhaseCreating},
+			}
+			// No cluster object on purpose: the guard must reach the terminal
+			// Failed state before any cluster dependency is resolved.
+			fc := fake.NewClientBuilder().
+				WithScheme(k8sClient.Scheme()).
+				WithStatusSubresource(&riakv1.RiakUser{}).
+				WithObjects(legacy).
+				Build()
+
+			noop := func(_ context.Context, _ string, _ ...string) (string, error) { return "", nil }
+			r := &RiakUserReconciler{
+				Client:   fc,
+				Scheme:   k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), noop),
+			}
+			res, err := r.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: "legacy-user", Namespace: ns},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeZero(), "spec is terminally invalid; no requeue")
+
+			u := &riakv1.RiakUser{}
+			Expect(fc.Get(ctx, types.NamespacedName{Name: "legacy-user", Namespace: ns}, u)).To(Succeed())
+			Expect(u.Status.Phase).To(Equal(riakv1.UserPhaseFailed))
+			Expect(u.Status.Error).To(ContainSubstring("certificateRef is required"))
 		})
 	})
 

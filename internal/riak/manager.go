@@ -129,13 +129,12 @@ func (m *Manager) CreateUserForCert(ctx context.Context, cluster *riakv1.RiakClu
 	return m.executor.CreateUserForCert(ctx, cluster.Namespace, pod, "riak", username)
 }
 
-// AddSecuritySource configures a Riak security source for a user.
-// sourceType is "password" or "certificate".
-func (m *Manager) AddSecuritySource(ctx context.Context, cluster *riakv1.RiakCluster, username, sourceType string) error {
+// AddSecuritySource registers the certificate security source for a user.
+func (m *Manager) AddSecuritySource(ctx context.Context, cluster *riakv1.RiakCluster, username string) error {
 	if len(cluster.Status.Members) == 0 {
 		return fmt.Errorf("no cluster members available")
 	}
 
 	pod := cluster.Status.Members[0].Pod
-	return m.executor.AddSecuritySource(ctx, cluster.Namespace, pod, "riak", username, sourceType)
+	return m.executor.AddSecuritySource(ctx, cluster.Namespace, pod, "riak", username)
 }

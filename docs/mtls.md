@@ -5,9 +5,10 @@ cluster end to end:
 
 1. **Cluster TLS** — the operator requests a server certificate for every node in a
    `RiakCluster` and configures Riak's HTTPS listener with it.
-2. **mTLS client authentication** — a `RiakUser` can authenticate with a client
-   certificate instead of a password. The operator requests the client certificate
-   from cert-manager and registers the user with Riak's `certificate` security source.
+2. **mTLS client authentication** — every `RiakUser` authenticates with a client
+   certificate; it is the only supported mode. The operator requests the client
+   certificate from cert-manager and registers the user with Riak's `certificate`
+   security source.
 
 The operator never generates keys or runs its own CA; issuance and renewal are fully
 delegated to cert-manager.
@@ -119,8 +120,8 @@ so new connections pick up the renewed certificate automatically.
 
 ## mTLS client authentication for RiakUsers
 
-Set `spec.certificateRef` on a `RiakUser` to authenticate with a client certificate
-instead of a password:
+Every `RiakUser` authenticates with an mTLS client certificate — `spec.certificateRef`
+is required:
 
 ```yaml
 apiVersion: riak.openriak.io/v1
@@ -157,7 +158,7 @@ spec:
    then creates the user (`riak-admin security add-user`).
 3. Registers the certificate source
    (`riak-admin security add-source <username> 0.0.0.0/0 certificate`).
-4. Applies `spec.grants` as with password users.
+4. Applies `spec.grants`.
 
 cert-manager writes the issued certificate to the secret (default
 `<riakuser-name>-client-tls`) containing `tls.crt`, `tls.key`, and `ca.crt`.
