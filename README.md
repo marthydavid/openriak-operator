@@ -130,7 +130,8 @@ spec:
   # Number of Riak nodes
   size: 3
 
-  # Container image (optional; defaults to ghcr.io/marthydavid/riak:3.2.6)
+  # Container image (optional; defaults to ghcr.io/marthydavid/riak:3.2.6).
+  # ghcr.io/marthydavid/riak:3.4.0 (RHEL 9 / UBI9 base) is also published.
   image: ghcr.io/marthydavid/riak:3.2.6
   imagePullPolicy: IfNotPresent
 

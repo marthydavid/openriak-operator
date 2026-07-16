@@ -1,20 +1,31 @@
-# Riak KV 3.2 container image
-# RPM source: https://files.tiot.jp/riak/kv/3.2/
-# Base: Red Hat Universal Base Image 8
+# Riak KV container image on Red Hat Universal Base Image.
+# RPM source: https://files.tiot.jp/riak/kv/
+#
+# Build args select the Riak release and matching RHEL base. Upstream ships
+# each release for specific RHEL majors only (3.2.x: el8; 3.4.x: el9 with
+# OTP26), so RHEL_VERSION and RIAK_OTP must match the chosen RIAK_VERSION —
+# see .github/workflows/build-riak.yml for the published combinations.
+#
+#   3.2.6 (default): --build-arg RIAK_SERIES=3.2 RIAK_VERSION=3.2.6 RIAK_OTP=OTP24 RHEL_VERSION=8
+#   3.4.0:           --build-arg RIAK_SERIES=3.4 RIAK_VERSION=3.4.0 RIAK_OTP=OTP26 RHEL_VERSION=9
 
-FROM registry.access.redhat.com/ubi8/ubi AS base
+ARG RHEL_VERSION=8
 
+FROM registry.access.redhat.com/ubi${RHEL_VERSION}/ubi AS base
+
+ARG RHEL_VERSION
+ARG RIAK_SERIES=3.2
 ARG RIAK_VERSION=3.2.6
 ARG RIAK_OTP=OTP24
 ARG RIAK_ARCH=x86_64
-ARG RIAK_RPM_URL=https://files.tiot.jp/riak/kv/3.2/${RIAK_VERSION}/rhel/8/riak-${RIAK_VERSION}.${RIAK_OTP}-1.el8.${RIAK_ARCH}.rpm
+ARG RIAK_RPM_URL=https://files.tiot.jp/riak/kv/${RIAK_SERIES}/${RIAK_VERSION}/rhel/${RHEL_VERSION}/riak-${RIAK_VERSION}.${RIAK_OTP}-1.el${RHEL_VERSION}.${RIAK_ARCH}.rpm
 
 # Enable EPEL to satisfy the /usr/bin/escript dependency declared by the
-# Riak RPM spec (provided by erlang-erts).  Riak bundles its own OTP24
+# Riak RPM spec (provided by erlang-erts).  Riak bundles its own OTP
 # runtime; erlang-erts is only needed to satisfy the RPM dependency check.
 # procps-ng: provides `ps`, used by riak startup scripts.
 RUN dnf install -y \
-        https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm \
+        "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${RHEL_VERSION}.noarch.rpm" \
     && dnf install -y \
         procps-ng \
         erlang-erts \

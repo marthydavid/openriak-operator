@@ -6,10 +6,12 @@ on:
     tags: ['riak-*']
     paths:
       - 'images/riak/**'
+      - '.github/workflows/build-riak.yml'
   pull_request:
     branches: [main]
     paths:
       - 'images/riak/**'
+      - '.github/workflows/build-riak.yml'
 
 permissions:
   contents: read
@@ -17,8 +19,24 @@ permissions:
 
 jobs:
   build:
-    name: Build and push
+    name: Build and push ${{ matrix.riak_version }} (el${{ matrix.rhel_version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Upstream ships each Riak release for specific RHEL majors only;
+      # series/OTP/RHEL must match the version (see images/riak/Dockerfile).
+      matrix:
+        include:
+          - riak_series: "3.2"
+            riak_version: "3.2.6"
+            riak_otp: OTP24
+            rhel_version: "8"
+            is_default: true
+          - riak_series: "3.4"
+            riak_version: "3.4.0"
+            riak_otp: OTP26
+            rhel_version: "9"
+            is_default: false
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -34,30 +52,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Riak version from Dockerfile
-        id: riak-ver
-        run: |
-          ver=$(grep '^ARG RIAK_VERSION=' images/riak/Dockerfile | cut -d= -f2)
-          echo "version=${ver}" >> "$GITHUB_OUTPUT"
-
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/marthydavid/riak
           tags: |
-            type=raw,value=${{ steps.riak-ver.outputs.version }}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=match,pattern=riak-(.*),group=1
+            type=raw,value=${{ matrix.riak_version }}
+            # `latest` follows the default (3.2.x) variant on main only.
+            type=raw,value=latest,enable=${{ matrix.is_default && github.ref == 'refs/heads/main' }}
 
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: images/riak
-          # Riak RPM is x86_64 only; no arm64 build available from tiot.jp
+          # Riak RPMs are x86_64 only; no arm64 build available from tiot.jp
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            RIAK_SERIES=${{ matrix.riak_series }}
+            RIAK_VERSION=${{ matrix.riak_version }}
+            RIAK_OTP=${{ matrix.riak_otp }}
+            RHEL_VERSION=${{ matrix.rhel_version }}
+          cache-from: type=gha,scope=riak-${{ matrix.riak_version }}
+          cache-to: type=gha,mode=max,scope=riak-${{ matrix.riak_version }}
