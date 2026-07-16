@@ -21,6 +21,7 @@ A production-ready Kubernetes operator for managing Riak clusters with full life
 
 - Kubernetes 1.24+
 - kubectl configured to access your cluster
+- Helm 3.8+ (for the recommended install path; OCI registry support)
 - A storage class available for persistent volumes
 - (Optional) cert-manager for TLS support
 

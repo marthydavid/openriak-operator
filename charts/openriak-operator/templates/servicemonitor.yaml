@@ -12,10 +12,10 @@ spec:
       port: https
       scheme: https
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      {{- with .Values.metrics.serviceMonitor.tlsConfig }}
       tlsConfig:
-        # The manager serves metrics with a self-signed certificate; provide
-        # ca/cert/key files here instead if you issue it a real certificate.
-        insecureSkipVerify: true
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
   selector:
     matchLabels:
       {{- include "openriak-operator.selectorLabels" . | nindent 6 }}

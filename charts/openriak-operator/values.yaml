@@ -29,6 +29,13 @@ metrics:
   serviceMonitor:
     # Requires the Prometheus Operator CRDs.
     enabled: false
+    # TLS settings for the scrape. The manager serves metrics with a
+    # self-signed certificate, so verification is skipped by default.
+    # When you issue the manager a real certificate, set
+    # insecureSkipVerify: false explicitly (Helm merges maps on override)
+    # and add caFile/serverName etc. (files must be mounted into Prometheus).
+    tlsConfig:
+      insecureSkipVerify: true
 
 serviceAccount:
   create: true

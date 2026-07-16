@@ -199,7 +199,11 @@ subjects:
   name: {{ include "openriak-operator.serviceAccountName" . }}
   namespace: {{ .Release.Namespace }}
 ---
-# Grant to scraper ServiceAccounts that should be allowed to read /metrics.
+# Convenience role for scrapers: the chart deliberately does NOT bind it —
+# bind it yourself to the ServiceAccount Prometheus scrapes with, e.g.
+#   kubectl create clusterrolebinding riak-metrics-scraper \
+#     --clusterrole={{ include "openriak-operator.fullname" . }}-metrics-reader \
+#     --serviceaccount=<prom-ns>:<prom-sa>
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
