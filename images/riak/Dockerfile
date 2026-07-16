@@ -25,6 +25,7 @@ FROM registry.access.redhat.com/ubi${RHEL_VERSION}/ubi AS base-amd64
 
 ARG RHEL_VERSION
 ARG AMD64_RPM_URL=https://files.tiot.jp/riak/kv/3.2/3.2.6/rhel/8/riak-3.2.6.OTP24-1.el8.x86_64.rpm
+ARG AMD64_RPM_SHA256=63363abccafe83db9d440a9968dc436a0cd2753d0665093aff6d1a556f3e2c05
 
 # EPEL satisfies the /usr/bin/escript dependency declared by the Riak RPM spec
 # (provided by erlang-erts). Riak bundles its own OTP runtime; erlang-erts is
@@ -35,6 +36,7 @@ RUN dnf install -y \
         procps-ng \
         erlang-erts \
     && curl -fsSLo /tmp/riak.rpm "${AMD64_RPM_URL}" \
+    && echo "${AMD64_RPM_SHA256}  /tmp/riak.rpm" | sha256sum -c - \
     && dnf install -y /tmp/riak.rpm \
     && rm -f /tmp/riak.rpm \
     && dnf clean all \
@@ -44,6 +46,7 @@ RUN dnf install -y \
 FROM amazonlinux:${AMZN_VERSION} AS base-arm64
 
 ARG ARM64_PKG_URL=https://files.tiot.jp/riak/kv/3.2/3.2.6/amazon/2023%20(graviton%202)/riak-3.2.6.OTP24-1.amzn2023.aarch64.rpm
+ARG ARM64_PKG_SHA256=a62366fb0e2e90f55a36c05993d028db24bd831696b1a031dc61cfd0c2d200a9
 
 # yum works on both amzn2 (real yum) and amzn2023 (dnf alias).
 # shadow-utils: useradd; the riak user is pre-created so the RPM %pre is a
@@ -57,6 +60,7 @@ RUN yum install -y procps-ng shadow-utils hostname findutils tar gzip \
     && groupadd -r riak \
     && useradd -r -g riak -d /var/lib/riak -s /sbin/nologin riak \
     && curl -fsSLo /tmp/riak.rpm "${ARM64_PKG_URL}" \
+    && echo "${ARM64_PKG_SHA256}  /tmp/riak.rpm" | sha256sum -c - \
     && rpm -ivh --nodeps /tmp/riak.rpm \
     && rm -f /tmp/riak.rpm \
     && ln -sf /usr/lib64/riak/erts-*/bin/escript /usr/bin/escript
