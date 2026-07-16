@@ -131,8 +131,8 @@ spec:
   size: 3
 
   # Container image (optional; defaults to ghcr.io/marthydavid/riak:3.2.6).
-  # Published multi-arch (amd64+arm64) variants: 3.0.16, 3.2.6, 3.4.0
-  # (minor aliases 3.0 / 3.2 / 3.4 also exist).
+  # Published variants (minor aliases 3.0/3.2/3.4 also exist):
+  #   3.0.16, 3.2.6 — multi-arch (amd64+arm64); 3.4.0 — amd64 only.
   image: ghcr.io/marthydavid/riak:3.2.6
   imagePullPolicy: IfNotPresent
 

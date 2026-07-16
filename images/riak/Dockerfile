@@ -11,15 +11,14 @@
 # versions (el8 vs el9, amzn2 vs amzn2023, three spellings of the graviton
 # directory). The published version/URL combinations live in the build-riak
 # workflow matrix. Defaults build the 3.2.6 flagship.
+#
+# Versions whose only Graviton RPMs target graviton3 (3.4.0: both OTP24 and
+# OTP26 builds verified to SIGILL — SVE instructions — on non-SVE arm64 like
+# Apple Silicon, Ampere and Graviton2) are published amd64-only; only
+# RPM-based distributions are used.
 
 ARG RHEL_VERSION=8
 ARG AMZN_VERSION=2023
-ARG UBUNTU_VERSION=24.04
-# arm64 package flavor: "rpm" (Amazon Linux Graviton build) or "deb" (Ubuntu
-# arm64 build). Graviton3-targeted RPMs use SVE instructions and SIGILL on
-# non-SVE arm64 (Apple Silicon, Ampere, Graviton2) — versions that only ship
-# graviton3 RPMs use the generic Ubuntu arm64 deb instead.
-ARG ARM64_VARIANT=rpm
 
 # ── amd64: Red Hat UBI ────────────────────────────────────────────────────────
 FROM registry.access.redhat.com/ubi${RHEL_VERSION}/ubi AS base-amd64
@@ -41,8 +40,8 @@ RUN dnf install -y \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
-# ── arm64 (rpm): Amazon Linux + Graviton RPM ─────────────────────────────────
-FROM amazonlinux:${AMZN_VERSION} AS base-arm64-rpm
+# ── arm64: Amazon Linux + Graviton RPM ───────────────────────────────────────
+FROM amazonlinux:${AMZN_VERSION} AS base-arm64
 
 ARG ARM64_PKG_URL=https://files.tiot.jp/riak/kv/3.2/3.2.6/amazon/2023%20(graviton%202)/riak-3.2.6.OTP24-1.amzn2023.aarch64.rpm
 
@@ -61,23 +60,6 @@ RUN yum install -y procps-ng shadow-utils hostname findutils tar gzip \
     && rpm -ivh --nodeps /tmp/riak.rpm \
     && rm -f /tmp/riak.rpm \
     && ln -sf /usr/lib64/riak/erts-*/bin/escript /usr/bin/escript
-
-# ── arm64 (deb): Ubuntu + generic arm64 deb ──────────────────────────────────
-FROM ubuntu:${UBUNTU_VERSION} AS base-arm64-deb
-
-ARG ARM64_PKG_URL=https://files.tiot.jp/riak/kv/3.4/3.4.0/ubuntu/noble64/riak_3.4.0-OTP26_arm64.deb
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates procps \
-    && curl -fsSLo /tmp/riak.deb "${ARM64_PKG_URL}" \
-    && (dpkg -i /tmp/riak.deb || apt-get install -y -f --no-install-recommends) \
-    && rm -f /tmp/riak.deb \
-    && rm -rf /var/lib/apt/lists/* \
-    && id riak >/dev/null 2>&1 || useradd -r -d /var/lib/riak -s /usr/sbin/nologin riak
-
-# ── arm64: selected flavor ────────────────────────────────────────────────────
-ARG ARM64_VARIANT
-FROM base-arm64-${ARM64_VARIANT} AS base-arm64
 
 # ── common ────────────────────────────────────────────────────────────────────
 ARG TARGETARCH
