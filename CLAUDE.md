@@ -97,12 +97,13 @@ All images are published to **GitHub Container Registry** under `ghcr.io/marthyd
 | Image | Registry path | Base |
 |-------|--------------|------|
 | Operator | `ghcr.io/marthydavid/openriak-operator:<tag>` | Go 1.22 / alpine |
-| Riak KV 3.2 (default, `latest`) | `ghcr.io/marthydavid/riak:3.2.6` | UBI8 (el8 RPM, OTP24) |
-| Riak KV 3.4 | `ghcr.io/marthydavid/riak:3.4.0` | UBI9 (el9 RPM, OTP26) |
+| Riak KV 3.2 (default, `latest`) | `ghcr.io/marthydavid/riak:3.2.6` | UBI8 (el8 RPM, OTP24) — amd64 only |
+| Riak KV 3.4 | `ghcr.io/marthydavid/riak:3.4.0` | UBI9 (el9 RPM, OTP26) — amd64 only |
 
 The Riak image is built from `images/riak/Dockerfile`, parameterized by build args
 (`RIAK_SERIES`/`RIAK_VERSION`/`RIAK_OTP`/`RHEL_VERSION`) because upstream ships each release for
-specific RHEL majors only. The published combinations live in the build-riak workflow matrix.
+specific RHEL majors only, and publishes x86_64 RPMs only — both Riak images are amd64-only
+(no arm64 variant exists upstream). The published combinations live in the build-riak workflow matrix.
 The operator image is built from the root `Dockerfile` (multi-arch amd64+arm64).
 
 Build locally:
