@@ -1,0 +1,61 @@
+# Default values for openriak-operator.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/marthydavid/openriak-operator
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+riak:
+  # Default operand image used when a RiakCluster omits spec.image
+  # (passed to the operator as --riak-image).
+  image: ghcr.io/marthydavid/riak:3.2.6
+
+# Leader election is required when replicaCount > 1.
+leaderElection:
+  enabled: true
+
+metrics:
+  # Serve authenticated /metrics on :8443 and create the metrics Service
+  # plus the token-review RBAC the endpoint needs.
+  enabled: true
+  serviceMonitor:
+    # Requires the Prometheus Operator CRDs.
+    enabled: false
+    # TLS settings for the scrape. The manager serves metrics with a
+    # self-signed certificate, so verification is skipped by default.
+    # When you issue the manager a real certificate, set
+    # insecureSkipVerify: false explicitly (Helm merges maps on override)
+    # and add caFile/serverName etc. (files must be mounted into Prometheus).
+    tlsConfig:
+      insecureSkipVerify: true
+
+serviceAccount:
+  create: true
+  # Defaults to the release fullname when empty.
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+podAnnotations: {}
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

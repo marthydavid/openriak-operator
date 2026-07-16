@@ -21,12 +21,24 @@ A production-ready Kubernetes operator for managing Riak clusters with full life
 
 - Kubernetes 1.24+
 - kubectl configured to access your cluster
+- Helm 3.8+ (for the recommended install path; OCI registry support)
 - A storage class available for persistent volumes
 - (Optional) cert-manager for TLS support
 
 ## Installation
 
-### Option 1: Deploy to Local Kind Cluster
+### Option 1: Helm (recommended)
+
+```bash
+helm install openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator \
+  --namespace openriak-system --create-namespace
+```
+
+Or from a checkout: `helm install openriak-operator charts/openriak-operator ...`.
+See [charts/openriak-operator](charts/openriak-operator/README.md) for all values
+(operator image, default operand image, metrics, ServiceMonitor, RBAC toggles).
+
+### Option 2: Deploy to Local Kind Cluster
 
 ```bash
 # Create Kind cluster
@@ -43,7 +55,7 @@ make install
 make deploy IMG=riak-operator:latest
 ```
 
-### Option 2: Deploy to Production Cluster
+### Option 3: Deploy to Production Cluster
 
 ```bash
 # Build and push to registry
