@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -205,11 +206,20 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 		},
 	}
 
-	// Add custom Riak config as environment variables
-	for key, value := range cluster.Spec.RiakConfig {
+	// Pass riak.conf keys through the entrypoint's RIAK_CONFIG_* scheme: dots
+	// become double underscores (the entrypoint reverses this), so any riak.conf
+	// key works — storage backends, memory_backend.ttl, multi_backend
+	// definitions, etc. Keys are sorted because CreateOrUpdate diffs the pod
+	// template every reconcile: map-random env order would roll pods for nothing.
+	keys := make([]string, 0, len(cluster.Spec.RiakConfig))
+	for key := range cluster.Spec.RiakConfig {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
 		env = append(env, corev1.EnvVar{
-			Name:  fmt.Sprintf("RIAK_%s", strings.ToUpper(strings.ReplaceAll(key, ".", "_"))),
-			Value: value,
+			Name:  "RIAK_CONFIG_" + strings.ToUpper(strings.ReplaceAll(key, ".", "__")),
+			Value: cluster.Spec.RiakConfig[key],
 		})
 	}
 

@@ -54,3 +54,51 @@ spec:
 
 Changing `--riak-image` (or `spec.image`) triggers a rolling update of the
 StatefulSet on the next reconcile of each affected cluster.
+
+## Riak configuration (`spec.riakConfig`)
+
+`RiakCluster.spec.riakConfig` passes **any riak.conf key** to every node — the operator maps
+each key to the entrypoint's `RIAK_CONFIG_*` environment scheme and nodes render them into
+`riak.conf` at startup. Changing values rolls the StatefulSet automatically.
+
+### Memory backend with TTL
+
+```yaml
+spec:
+  riakConfig:
+    storage_backend: memory
+    memory_backend.ttl: 60s
+    memory_backend.max_memory_per_vnode: 128MB
+```
+
+### Multi-backend: durable default + TTL'd cache buckets
+
+```yaml
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: my-cluster
+spec:
+  riakConfig:
+    storage_backend: multi
+    multi_backend.default: bitcask_data
+    multi_backend.bitcask_data.storage_backend: bitcask
+    multi_backend.mem_ttl.storage_backend: memory
+    multi_backend.mem_ttl.memory_backend.ttl: 60s
+    multi_backend.mem_ttl.memory_backend.max_memory_per_vnode: 32MB
+---
+# Buckets of this type live on the memory backend and expire after 60s.
+apiVersion: riak.openriak.io/v1
+kind: RiakBucket
+metadata:
+  name: cache-bucket
+spec:
+  clusterName: my-cluster
+  bucketName: cache
+  bucketType: cache
+  properties:
+    backend: mem_ttl
+```
+
+Any other riak.conf key works the same way (bitcask/leveldb tuning, AAE, limits, …) — see the
+[Riak configuration reference](https://www.tiot.jp/riak-docs/riak/kv/latest/configuring/reference/).

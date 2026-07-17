@@ -115,7 +115,16 @@ spec:
               riakConfig:
                 additionalProperties:
                   type: string
-                description: RiakConfig is the riak.conf configuration for all nodes.
+                description: |-
+                  RiakConfig sets arbitrary riak.conf keys on all nodes. Any key from the
+                  Riak configuration reference works, e.g.:
+                    storage_backend: memory
+                    memory_backend.ttl: 60s
+                    memory_backend.max_memory_per_vnode: 128MB
+                    multi_backend.mem_ttl.storage_backend: memory
+                  Changing values rolls the StatefulSet so nodes restart with the new
+                  configuration. Bind buckets to a multi_backend entry via
+                  RiakBucket.spec.properties ("backend": "<name>").
                 type: object
               servicePort:
                 description: ServicePort is the port for the Riak protocol service.

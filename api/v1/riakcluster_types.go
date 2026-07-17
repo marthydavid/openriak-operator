@@ -46,7 +46,15 @@ type RiakClusterSpec struct {
 	// StorageSize is the size of storage for each Riak node (e.g., 10Gi).
 	StorageSize *resource.Quantity `json:"storageSize,omitempty"`
 
-	// RiakConfig is the riak.conf configuration for all nodes.
+	// RiakConfig sets arbitrary riak.conf keys on all nodes. Any key from the
+	// Riak configuration reference works, e.g.:
+	//   storage_backend: memory
+	//   memory_backend.ttl: 60s
+	//   memory_backend.max_memory_per_vnode: 128MB
+	//   multi_backend.mem_ttl.storage_backend: memory
+	// Changing values rolls the StatefulSet so nodes restart with the new
+	// configuration. Bind buckets to a multi_backend entry via
+	// RiakBucket.spec.properties ("backend": "<name>").
 	RiakConfig map[string]string `json:"riakConfig,omitempty"`
 
 	// TLS configuration for inter-node communication.
