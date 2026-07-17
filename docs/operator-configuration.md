@@ -61,6 +61,11 @@ StatefulSet on the next reconcile of each affected cluster.
 each key to the entrypoint's `RIAK_CONFIG_*` environment scheme and nodes render them into
 `riak.conf` at startup. Changing values rolls the StatefulSet automatically.
 
+> **Warning:** changing `storage_backend` (or a bucket type's `backend` binding) on a
+> cluster that already holds data does **not** migrate the data — objects stored in the
+> previous backend become unreachable. Take a backup or plan a migration before switching
+> backends on a live cluster; pick the backend layout up front where possible.
+
 ### Memory backend with TTL
 
 ```yaml
