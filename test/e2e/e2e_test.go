@@ -253,6 +253,11 @@ spec:
   storageSize: 1Gi
   riakConfig:
     ring_size: "8"
+    storage_backend: multi
+    multi_backend.default: bitcask_data
+    multi_backend.bitcask_data.storage_backend: bitcask
+    multi_backend.mem_ttl.storage_backend: memory
+    multi_backend.mem_ttl.memory_backend.ttl: 60s
 `, clusterName, riakNS))
 
 			By("creating a self-signed Issuer for the RiakUser client certificate")
@@ -277,6 +282,8 @@ spec:
   clusterName: %s
   bucketName: e2e-app-data
   bucketType: e2e-app-type
+  properties:
+    backend: mem_ttl
 `, bucketName, riakNS, clusterName))
 
 			By("creating a RiakUser with read/write grants")
@@ -450,6 +457,30 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to list bucket types")
 				g.Expect(out).To(ContainSubstring("e2e-app-type"),
 					"Bucket type e2e-app-type not found in riak-admin bucket-type list")
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("riakConfig keys are rendered into riak.conf on the node", func() {
+			By("verifying the multi_backend definition reached riak.conf")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
+					"grep", "-E", "multi_backend", "/etc/riak/riak.conf")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Failed to read riak.conf")
+				g.Expect(out).To(ContainSubstring("multi_backend.mem_ttl.storage_backend = memory"))
+				g.Expect(out).To(ContainSubstring("multi_backend.mem_ttl.memory_backend.ttl = 60s"))
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("the RiakBucket is bound to the multi_backend entry from its properties", func() {
+			By("verifying bucket-type status shows the backend property")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
+					"riak-admin", "bucket-type", "status", "e2e-app-type")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Failed to get bucket type status")
+				g.Expect(out).To(ContainSubstring("mem_ttl"),
+					"bucket type e2e-app-type not bound to the mem_ttl backend")
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
 		})
 

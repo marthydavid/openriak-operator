@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"sort"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -135,7 +137,11 @@ var _ = Describe("RiakCluster Controller", func() {
 						Image:       "basho/riak-kv:2.9",
 						ServicePort: 8087,
 						StorageSize: &storageSize,
-						RiakConfig:  map[string]string{"ring_size": "64"},
+						RiakConfig: map[string]string{
+							"ring_size":                             "64",
+							"memory_backend.ttl":                    "60s",
+							"multi_backend.mem_ttl.storage_backend": "memory",
+						},
 						Resources: &corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceCPU:    resource.MustParse("1"),
@@ -158,14 +164,23 @@ var _ = Describe("RiakCluster Controller", func() {
 			Expect(*sts.Spec.Replicas).To(Equal(int32(5)))
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("basho/riak-kv:2.9"))
 
-			// RIAK_RING_SIZE env var should be injected from RiakConfig
-			var found bool
+			// riakConfig keys map to the entrypoint's RIAK_CONFIG_* scheme
+			// (dot -> double underscore), so any riak.conf key passes through.
+			envMap := map[string]string{}
+			var configOrder []string
 			for _, e := range sts.Spec.Template.Spec.Containers[0].Env {
-				if e.Name == "RIAK_RING_SIZE" && e.Value == "64" {
-					found = true
+				envMap[e.Name] = e.Value
+				if strings.HasPrefix(e.Name, "RIAK_CONFIG_") {
+					configOrder = append(configOrder, e.Name)
 				}
 			}
-			Expect(found).To(BeTrue(), "expected RIAK_RING_SIZE env var")
+			Expect(envMap["RIAK_CONFIG_RING_SIZE"]).To(Equal("64"))
+			Expect(envMap["RIAK_CONFIG_MEMORY_BACKEND__TTL"]).To(Equal("60s"))
+			Expect(envMap["RIAK_CONFIG_MULTI_BACKEND__MEM_TTL__STORAGE_BACKEND"]).To(Equal("memory"))
+			// Sorted deterministically: CreateOrUpdate diffs the pod template, so
+			// map-random ordering would roll pods on every reconcile.
+			Expect(sort.StringsAreSorted(configOrder)).To(BeTrue(),
+				"RIAK_CONFIG_* env vars must be emitted in sorted key order")
 		})
 	})
 
