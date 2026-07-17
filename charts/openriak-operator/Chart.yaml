@@ -5,7 +5,7 @@ type: application
 # Chart version; bumped independently of the operator image (appVersion).
 version: 0.1.0
 # Operator image tag installed by default.
-appVersion: "latest"
+appVersion: "0.0.2"
 home: https://github.com/marthydavid/openriak-operator
 sources:
   - https://github.com/marthydavid/openriak-operator
