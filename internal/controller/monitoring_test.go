@@ -45,8 +45,11 @@ func TestReconcileServiceMonitor_ownerRefError(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "default"},
 	}
 
+	// CreateOrUpdate runs the mutate (which sets the owner reference) and returns
+	// its error; with RiakCluster absent from the scheme the owner reference
+	// cannot be resolved, so the reconcile fails rather than writing the object.
 	err := r.reconcileServiceMonitor(context.Background(), cluster)
-	if err == nil || !strings.Contains(err.Error(), "controller reference") {
-		t.Fatalf("expected controller reference error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "RiakCluster") {
+		t.Fatalf("expected owner-reference error mentioning RiakCluster, got %v", err)
 	}
 }

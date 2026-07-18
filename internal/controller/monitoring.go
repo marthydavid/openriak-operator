@@ -18,13 +18,13 @@ package controller
 
 import (
 	"context"
-	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -188,7 +188,18 @@ func exporterContainer(cluster *riakv1.RiakCluster) corev1.Container {
 			InitialDelaySeconds: 5,
 			PeriodSeconds:       10,
 		},
-		Resources: corev1.ResourceRequirements{},
+		// json_exporter is lightweight; give it modest requests so it schedules
+		// predictably and caps so a wedged exporter can't starve the Riak node.
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("32Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			},
+		},
 	}
 }
 
@@ -206,60 +217,53 @@ func exporterConfigVolume(cluster *riakv1.RiakCluster) corev1.Volume {
 	}
 }
 
-// reconcileServiceMonitor creates the Prometheus Operator ServiceMonitor
-// scraping the exporter through the client Service. Clusters without the
-// Prometheus Operator CRDs are supported: a missing ServiceMonitor kind is
-// logged and skipped, not treated as an error.
+// reconcileServiceMonitor creates or updates the Prometheus Operator
+// ServiceMonitor scraping the exporter through the client Service. Clusters
+// without the Prometheus Operator CRDs are supported: a missing ServiceMonitor
+// kind is logged and skipped, not treated as an error.
 func (r *RiakClusterReconciler) reconcileServiceMonitor(ctx context.Context, cluster *riakv1.RiakCluster) error {
-	sm := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "monitoring.coreos.com/v1",
-			"kind":       "ServiceMonitor",
-			"metadata": map[string]interface{}{
-				"name":      cluster.Name + "-metrics",
-				"namespace": cluster.Namespace,
-			},
-			"spec": map[string]interface{}{
-				"selector": map[string]interface{}{
-					"matchLabels": map[string]interface{}{
-						"app":     "riak",
-						"cluster": cluster.Name,
-					},
-				},
-				"endpoints": []interface{}{
-					map[string]interface{}{
-						"port": riakMetricsPortName,
-						"path": "/probe",
-						"params": map[string]interface{}{
-							"module": []interface{}{"riak"},
-							"target": []interface{}{riakStatsURL},
-						},
-						"interval": "30s",
-					},
+	sm := &unstructured.Unstructured{}
+	sm.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
+	})
+	sm.SetName(cluster.Name + "-metrics")
+	sm.SetNamespace(cluster.Namespace)
+
+	// CreateOrUpdate so ServiceMonitor spec changes (e.g. port/path/interval
+	// across operator versions) propagate to existing objects, matching the
+	// ConfigMap and Service reconciles. The mutate sets the full desired spec
+	// and owner reference each time.
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sm, func() error {
+		sm.Object["spec"] = map[string]interface{}{
+			"selector": map[string]interface{}{
+				"matchLabels": map[string]interface{}{
+					"app":     "riak",
+					"cluster": cluster.Name,
 				},
 			},
-		},
-	}
+			"endpoints": []interface{}{
+				map[string]interface{}{
+					"port": riakMetricsPortName,
+					"path": "/probe",
+					"params": map[string]interface{}{
+						"module": []interface{}{"riak"},
+						"target": []interface{}{riakStatsURL},
+					},
+					"interval": "30s",
+				},
+			},
+		}
+		return controllerutil.SetControllerReference(cluster, sm, r.Scheme)
+	})
 
-	if err := controllerutil.SetControllerReference(cluster, sm, r.Scheme); err != nil {
-		return fmt.Errorf("setting controller reference on ServiceMonitor: %w", err)
-	}
-
-	// Create-only, like the cluster/user Certificates: attempt the create and
-	// tolerate the two benign outcomes. AlreadyExists keeps reconciles
-	// idempotent; NoMatchError means the Prometheus Operator CRDs are not
-	// installed, so scraping is simply skipped rather than failing the cluster.
-	err := r.Create(ctx, sm)
-	switch {
-	case err == nil, apierrors.IsAlreadyExists(err):
-		return nil
-	case meta.IsNoMatchError(err):
+	// A missing Prometheus Operator CRD surfaces as a NoMatchError from the
+	// CreateOrUpdate Get; treat it as "no scraping configured", not a failure.
+	if meta.IsNoMatchError(err) {
 		log.FromContext(ctx).Info("Prometheus Operator CRDs not installed; skipping ServiceMonitor",
 			"cluster", cluster.Name)
 		return nil
-	default:
-		return err
 	}
+	return err
 }
 
 // monitoringSidecars returns the metrics exporter sidecar(s) for the pod, or an
