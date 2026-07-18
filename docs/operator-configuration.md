@@ -107,3 +107,34 @@ spec:
 
 Any other riak.conf key works the same way (bitcask/leveldb tuning, AAE, limits, …) — see the
 [Riak configuration reference](https://www.tiot.jp/riak-docs/riak/kv/latest/configuring/reference/).
+
+## Prometheus metrics (`spec.monitoring`)
+
+Riak has no native Prometheus endpoint — it exposes a JSON document at `GET /stats` on the HTTP
+port (~470 numeric fields). Enabling monitoring adds a `json_exporter` **sidecar** to every Riak
+pod that translates `/stats` into Prometheus metrics on port 7979, exposes that port on the
+cluster Service, and (when the Prometheus Operator CRDs are present) creates a `ServiceMonitor`.
+Clusters without the Prometheus Operator are supported: the ServiceMonitor is skipped, and
+Prometheus can scrape the exporter directly at
+`http://<pod>:7979/probe?module=riak&target=http://127.0.0.1:8098/stats` (the exporter's own
+`/metrics` path serves only json_exporter's internal metrics, not Riak's).
+
+```yaml
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: my-cluster
+spec:
+  size: 3
+  monitoring:
+    enabled: true
+    # exporterImage: quay.io/prometheuscommunity/json-exporter:v0.6.0  # override optional
+```
+
+Exported series are prefixed `riak_` and cover throughput (`riak_node_gets`, `riak_node_puts`,
+`riak_vnode_*`), GET/PUT latency percentiles (`riak_node_get_fsm_time_95`/`_99`), read repairs,
+coordinator redirects, protocol-buffer connections, object sizes, and Erlang VM internals
+(`riak_memory_processes`, `riak_sys_process_count`, `riak_ring_num_partitions`). The mapping
+lives in a ConfigMap the operator generates; scrape metrics from the exporter's `/probe` endpoint
+(`/probe?module=riak&target=http://<pod>:8098/stats`), which is what the generated ServiceMonitor
+does. These names map directly onto the community Riak Grafana dashboards.
