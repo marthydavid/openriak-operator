@@ -102,15 +102,17 @@ func run(o opts) error {
 	if err := ensureNamespace(ctx, c, o.namespace); err != nil {
 		return err
 	}
+	// Register teardown right after the namespace exists so an error in any
+	// later setup step (e.g. a missing cert-manager Issuer) still cleans up.
+	if !o.keep {
+		defer teardown(c, o)
+	}
 	// Users authenticate by client certificate, so they need a cert-manager
 	// Issuer; only require it (and cert-manager) when creating users.
 	if o.users > 0 {
 		if err := ensureIssuer(ctx, c, o.namespace); err != nil {
 			return err
 		}
-	}
-	if !o.keep {
-		defer teardown(c, o)
 	}
 
 	start := time.Now()
@@ -234,11 +236,14 @@ func waitReady(ctx context.Context, c client.Client, o opts, start time.Time) er
 }
 
 // countPhase lists resources of the given kind and returns (readyCount, failedCount).
+// A List error is surfaced to stderr rather than swallowed: for a diagnostic
+// harness, "the API is unreachable" must not look like "nothing is Ready yet".
 func countPhase(ctx context.Context, c client.Client, ns, listKind string) (ready, failed int) {
 	l := &unstructured.UnstructuredList{}
 	l.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: "riak.openriak.io", Version: "v1", Kind: listKind})
 	if err := c.List(ctx, l, client.InNamespace(ns)); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: listing %s failed: %v\n", listKind, err)
 		return 0, 0
 	}
 	for _, item := range l.Items {
