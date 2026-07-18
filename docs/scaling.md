@@ -30,8 +30,12 @@ Traced from the reconcilers (`internal/controller`):
 
 2. **Per-node exec cost.** All Riak-side work goes through `kubectl exec`
    (`internal/riak/executor.go`). This is correct and injection-safe, but it is
-   the dominant cost per operation. Batching grants or holding a longer-lived
-   admin connection would cut it — a larger change, not yet done.
+   the dominant cost per operation. A user's grants are **batched by target** —
+   one `security grant` call per distinct resource/bucket instead of one per
+   grant (`Manager.GrantUserPermissions`) — so a user with several grants on the
+   same target costs a single exec. Holding a longer-lived admin connection
+   would cut the remaining per-user calls (enable/add-user/add-source) further,
+   but that is a larger change, not yet done.
 
 ### Recommendations
 

@@ -95,30 +95,54 @@ func TestCreateBucketType_withMember(t *testing.T) {
 	}
 }
 
-// ---------- GrantUserPermission ----------
+// ---------- GrantUserPermissions ----------
 
-func TestGrantUserPermission_noMembers(t *testing.T) {
+func TestGrantUserPermissions_noMembers(t *testing.T) {
 	m := newManager(func(_ context.Context, _ string, _ ...string) (string, error) {
 		return "", nil
 	})
-	err := m.GrantUserPermission(context.Background(), emptyCluster(), "alice", "any", "read", "")
+	grants := []riakv1.Grant{{Resource: "any", Permission: "read"}}
+	err := m.GrantUserPermissions(context.Background(), emptyCluster(), "alice", grants)
 	if err == nil || !strings.Contains(err.Error(), "no cluster members") {
 		t.Fatalf("expected 'no cluster members' error, got: %v", err)
 	}
 }
 
-func TestGrantUserPermission_withMember(t *testing.T) {
+func TestGrantUserPermissions_empty(t *testing.T) {
+	runner, calls := mockRunner(nil, nil)
+	m := newManager(runner)
+	// No grants: nothing to do, and no cluster-member requirement.
+	if err := m.GrantUserPermissions(context.Background(), emptyCluster(), "alice", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected no calls, got %d", len(*calls))
+	}
+}
+
+func TestGrantUserPermissions_batchesByTarget(t *testing.T) {
 	runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
 	m := newManager(runner)
 
-	err := m.GrantUserPermission(context.Background(), clusterWithMembers("pod-0"), "alice", "any", "read", "")
-	if err != nil {
+	// Two grants on "any" collapse into one call; a bucket grant is a second.
+	grants := []riakv1.Grant{
+		{Resource: "any", Permission: "read"},
+		{Resource: "any", Permission: "write"},
+		{Resource: "bucket", Permission: "read", BucketName: "mytype"},
+	}
+	if err := m.GrantUserPermissions(context.Background(), clusterWithMembers("pod-0"), "alice", grants); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	joined := strings.Join((*calls)[0].args, " ")
-	// "read" maps to the Riak KV permission riak_kv.get.
-	if !strings.Contains(joined, "security grant riak_kv.get on any to alice") {
-		t.Errorf("unexpected call args: %s", joined)
+	if len(*calls) != 2 {
+		t.Fatalf("expected 2 batched calls, got %d", len(*calls))
+	}
+	anyCall := strings.Join((*calls)[0].args, " ")
+	if !strings.Contains(anyCall, "security grant riak_kv.get,riak_kv.put on any to alice") {
+		t.Errorf("unexpected 'any' call: %s", anyCall)
+	}
+	bucketCall := strings.Join((*calls)[1].args, " ")
+	if !strings.Contains(bucketCall, "security grant riak_kv.get on mytype to alice") {
+		t.Errorf("unexpected bucket call: %s", bucketCall)
 	}
 }
 

@@ -314,6 +314,27 @@ func TestCreateUserForCert_returnsAddUserError(t *testing.T) {
 	}
 }
 
+// ---------- GrantPermissions (batched) ----------
+
+func TestGrantPermissions_dedupesAndJoins(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
+	e := newTestExecutor(runner)
+
+	// admin expands to a set that overlaps read/write; the union must be
+	// de-duplicated into a single comma-joined token list in one call.
+	if err := e.GrantPermissions(context.Background(), "ns", "pod", "riak", "alice",
+		"any", "", []string{"read", "write", "admin"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(*calls))
+	}
+	joined := strings.Join((*calls)[0].args, " ")
+	if !strings.Contains(joined, "security grant riak_kv.get,riak_kv.put,riak_kv.delete,riak_kv.list_keys,riak_kv.list_buckets on any to alice") {
+		t.Errorf("unexpected deduped args: %s", joined)
+	}
+}
+
 // ---------- GrantPermission ----------
 
 func TestGrantPermission_nosBucket(t *testing.T) {

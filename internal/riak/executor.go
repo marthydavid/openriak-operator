@@ -189,12 +189,34 @@ func riakKVPermissions(permission string) string {
 // The CRD models resource as "any" or "bucket"; for "bucket" the bucket field
 // carries the grant target — either "<type>" or "<type> <bucket>".
 func (e *Executor) GrantPermission(ctx context.Context, namespace, podName, containerName, username, resource, permission, bucket string) error {
+	return e.GrantPermissions(ctx, namespace, podName, containerName, username, resource, bucket, []string{permission})
+}
+
+// GrantPermissions grants several CRD permissions on a single target in one
+// riak-admin call, e.g. "security grant riak_kv.get,riak_kv.put on any to bob".
+// Each riak-admin invocation spawns a temporary Erlang VM on the node, so
+// collapsing a user's grants on the same target into one call materially cuts
+// the exec/BEAM load when provisioning many users. The mapped permission tokens
+// are de-duplicated with a stable order so the pod template / command is
+// deterministic.
+func (e *Executor) GrantPermissions(ctx context.Context, namespace, podName, containerName, username, resource, bucket string, permissions []string) error {
 	target := []string{"any"}
 	if resource == "bucket" && bucket != "" {
 		target = strings.Fields(bucket)
 	}
 
-	args := []string{"security", "grant", riakKVPermissions(permission), "on"}
+	seen := map[string]bool{}
+	var tokens []string
+	for _, p := range permissions {
+		for _, t := range strings.Split(riakKVPermissions(p), ",") {
+			if !seen[t] {
+				seen[t] = true
+				tokens = append(tokens, t)
+			}
+		}
+	}
+
+	args := []string{"security", "grant", strings.Join(tokens, ","), "on"}
 	args = append(args, target...)
 	args = append(args, "to", username)
 	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
