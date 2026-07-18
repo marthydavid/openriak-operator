@@ -64,6 +64,9 @@ type RiakClusterSpec struct {
 	// TLS configuration for inter-node communication.
 	TLS *TLSConfig `json:"tls,omitempty"`
 
+	// Monitoring configures Prometheus metrics for the Riak nodes.
+	Monitoring *MonitoringConfig `json:"monitoring,omitempty"`
+
 	// ServicePort is the port for the Riak protocol service.
 	// +kubebuilder:validation:Minimum=1024
 	// +kubebuilder:validation:Maximum=65535
@@ -74,6 +77,18 @@ type RiakClusterSpec struct {
 }
 
 // TLSConfig defines TLS settings for the cluster.
+// MonitoringConfig enables a Prometheus metrics sidecar on every Riak pod.
+// The sidecar translates Riak's JSON /stats endpoint into Prometheus metrics
+// (served on port 9198) and, when the Prometheus Operator CRDs are installed,
+// a ServiceMonitor is created to scrape it.
+type MonitoringConfig struct {
+	// Enabled turns on the metrics exporter sidecar and ServiceMonitor.
+	Enabled bool `json:"enabled"`
+
+	// ExporterImage overrides the json_exporter sidecar image.
+	ExporterImage string `json:"exporterImage,omitempty"`
+}
+
 type TLSConfig struct {
 	// Enabled specifies if TLS should be used.
 	Enabled bool `json:"enabled,omitempty"`

@@ -218,6 +218,152 @@ var _ = Describe("RiakCluster Controller", func() {
 		})
 	})
 
+	Context("monitoring enabled", func() {
+		const clusterName = "monitored-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		BeforeEach(func() {
+			existing := &riakv1.RiakCluster{}
+			if err := k8sClient.Get(ctx, nn, existing); err != nil && errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+					ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+					Spec: riakv1.RiakClusterSpec{
+						Size:  1,
+						Image: "basho/riak-kv:latest",
+						Monitoring: &riakv1.MonitoringConfig{
+							Enabled: true,
+						},
+					},
+				})).To(Succeed())
+			}
+		})
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		It("injects the exporter sidecar, ConfigMap, Service port and ServiceMonitor", func() {
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("the exporter ConfigMap holding the riak module")
+			cm := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: clusterName + "-metrics-exporter", Namespace: ns}, cm)).To(Succeed())
+			Expect(cm.Data["config.yml"]).To(ContainSubstring("riak_node_gets"))
+
+			By("the StatefulSet carrying the metrics-exporter sidecar and config volume")
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			var sawSidecar bool
+			for _, c := range sts.Spec.Template.Spec.Containers {
+				if c.Name == "metrics-exporter" {
+					sawSidecar = true
+					Expect(c.Ports[0].ContainerPort).To(Equal(riakMetricsPort))
+				}
+			}
+			Expect(sawSidecar).To(BeTrue(), "expected metrics-exporter sidecar")
+			var sawVol bool
+			for _, v := range sts.Spec.Template.Spec.Volumes {
+				if v.Name == "metrics-exporter-config" {
+					sawVol = true
+				}
+			}
+			Expect(sawVol).To(BeTrue(), "expected metrics-exporter-config volume")
+
+			By("the client Service exposing the metrics port")
+			svc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, nn, svc)).To(Succeed())
+			var sawMetricsPort bool
+			for _, p := range svc.Spec.Ports {
+				if p.Name == riakMetricsPortName && p.Port == riakMetricsPort {
+					sawMetricsPort = true
+				}
+			}
+			Expect(sawMetricsPort).To(BeTrue(), "expected metrics Service port")
+
+			By("a ServiceMonitor created for the cluster")
+			sm := &unstructured.Unstructured{}
+			sm.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"})
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: clusterName + "-metrics", Namespace: ns}, sm)).To(Succeed())
+
+			By("a second reconcile being idempotent (ServiceMonitor already exists)")
+			_, err = reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Context("monitoring with a custom exporter image", func() {
+		const clusterName = "monitored-custom-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		BeforeEach(func() {
+			existing := &riakv1.RiakCluster{}
+			if err := k8sClient.Get(ctx, nn, existing); err != nil && errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+					ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+					Spec: riakv1.RiakClusterSpec{
+						Size:  1,
+						Image: "basho/riak-kv:latest",
+						Monitoring: &riakv1.MonitoringConfig{
+							Enabled:       true,
+							ExporterImage: "example.com/custom-json-exporter:v9",
+						},
+					},
+				})).To(Succeed())
+			}
+		})
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		It("uses the override image for the sidecar", func() {
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			var image string
+			for _, c := range sts.Spec.Template.Spec.Containers {
+				if c.Name == "metrics-exporter" {
+					image = c.Image
+				}
+			}
+			Expect(image).To(Equal("example.com/custom-json-exporter:v9"))
+		})
+	})
+
+	Context("monitoring disabled by default", func() {
+		const clusterName = "unmonitored-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		BeforeEach(func() {
+			existing := &riakv1.RiakCluster{}
+			if err := k8sClient.Get(ctx, nn, existing); err != nil && errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+					ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+					Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
+				})).To(Succeed())
+			}
+		})
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		It("adds no sidecar, ConfigMap or ServiceMonitor", func() {
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			for _, c := range sts.Spec.Template.Spec.Containers {
+				Expect(c.Name).NotTo(Equal("metrics-exporter"))
+			}
+			cm := &corev1.ConfigMap{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name: clusterName + "-metrics-exporter", Namespace: ns}, cm)
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+		})
+	})
+
 	Context("status update with ready pods", func() {
 		const clusterName = "ready-cluster"
 		nn := types.NamespacedName{Name: clusterName, Namespace: ns}

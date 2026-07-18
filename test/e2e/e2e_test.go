@@ -251,6 +251,8 @@ spec:
   image: ghcr.io/marthydavid/riak:3.2.6
   storageClassName: standard
   storageSize: 1Gi
+  monitoring:
+    enabled: true
   riakConfig:
     ring_size: "8"
     storage_backend: multi
@@ -458,6 +460,30 @@ spec:
 				g.Expect(out).To(ContainSubstring("e2e-app-type"),
 					"Bucket type e2e-app-type not found in riak-admin bucket-type list")
 			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("the metrics exporter sidecar serves riak_ Prometheus series", func() {
+			By("verifying the metrics-exporter sidecar is present on the pod")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pod", clusterName+"-0", "-n", riakNS,
+					"-o", "jsonpath={.spec.containers[*].name}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(ContainSubstring("metrics-exporter"))
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("scraping /probe on the exporter and finding riak_ metrics")
+			Eventually(func(g Gomega) {
+				// The sidecar (json_exporter) turns Riak's JSON /stats into
+				// Prometheus metrics; hit its probe from inside the riak container.
+				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0",
+					"-c", "riak", "--",
+					"curl", "-s", "http://127.0.0.1:7979/probe?module=riak&target=http://127.0.0.1:8098/stats")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "Failed to scrape exporter")
+				g.Expect(out).To(ContainSubstring("riak_ring_num_partitions"))
+				g.Expect(out).To(ContainSubstring("riak_memory_processes"))
+			}, 3*time.Minute, 10*time.Second).Should(Succeed())
 		})
 
 		It("riakConfig keys are rendered into riak.conf on the node", func() {

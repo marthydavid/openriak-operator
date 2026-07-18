@@ -48,6 +48,21 @@ spec:
               imagePullPolicy:
                 description: ImagePullPolicy defines how the image should be pulled.
                 type: string
+              monitoring:
+                description: Monitoring configures Prometheus metrics for the Riak
+                  nodes.
+                properties:
+                  enabled:
+                    description: Enabled turns on the metrics exporter sidecar and
+                      ServiceMonitor.
+                    type: boolean
+                  exporterImage:
+                    description: ExporterImage overrides the json_exporter sidecar
+                      image.
+                    type: string
+                required:
+                - enabled
+                type: object
               nodeSelector:
                 additionalProperties:
                   type: string

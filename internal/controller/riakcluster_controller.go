@@ -59,9 +59,11 @@ type RiakClusterReconciler struct {
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile moves the current state of the cluster closer to the desired state.
 func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -104,6 +106,15 @@ func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	// Reconcile the metrics exporter ConfigMap before the StatefulSet so the
+	// sidecar's config volume exists when the pod starts.
+	if monitoringEnabled(cluster) {
+		if err := r.reconcileMonitoringConfigMap(ctx, cluster); err != nil {
+			log.Error(err, "failed to reconcile monitoring ConfigMap")
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Create StatefulSet
 	if err := r.reconcileStatefulSet(ctx, cluster); err != nil {
 		log.Error(err, "failed to reconcile StatefulSet")
@@ -118,6 +129,15 @@ func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.reconcileService(ctx, cluster); err != nil {
 		log.Error(err, "failed to reconcile Service")
 		return ctrl.Result{}, err
+	}
+
+	// Create the ServiceMonitor when monitoring is on. Missing Prometheus
+	// Operator CRDs are tolerated (logged and skipped, not an error).
+	if monitoringEnabled(cluster) {
+		if err := r.reconcileServiceMonitor(ctx, cluster); err != nil {
+			log.Error(err, "failed to reconcile ServiceMonitor")
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Update cluster status based on pods
@@ -280,6 +300,13 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 		containerPorts = append(containerPorts, corev1.ContainerPort{Name: riakTLSPortName, ContainerPort: riakTLSPort})
 	}
 
+	// Metrics sidecar: a json_exporter container translating Riak's JSON /stats
+	// into Prometheus metrics, plus its config ConfigMap volume.
+	podVolumes := extraVolumes
+	if monitoringEnabled(cluster) {
+		podVolumes = append(podVolumes, exporterConfigVolume(cluster))
+	}
+
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cluster.Name,
@@ -306,8 +333,8 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 				},
 				Spec: corev1.PodSpec{
 					NodeSelector: cluster.Spec.NodeSelector,
-					Volumes:      extraVolumes,
-					Containers: []corev1.Container{
+					Volumes:      podVolumes,
+					Containers: append([]corev1.Container{
 						{
 							Name:            "riak",
 							Image:           image,
@@ -355,7 +382,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 								FailureThreshold:    2,
 							},
 						},
-					},
+					}, monitoringSidecars(cluster)...),
 					TerminationGracePeriodSeconds: ptr(int64(60)),
 					Affinity: &corev1.Affinity{
 						PodAntiAffinity: &corev1.PodAntiAffinity{
@@ -420,6 +447,13 @@ func (r *RiakClusterReconciler) reconcileService(ctx context.Context, cluster *r
 				Name:       riakTLSPortName,
 				Port:       riakTLSPort,
 				TargetPort: intstr.FromString(riakTLSPortName),
+			})
+		}
+		if monitoringEnabled(cluster) {
+			ports = append(ports, corev1.ServicePort{
+				Name:       riakMetricsPortName,
+				Port:       riakMetricsPort,
+				TargetPort: intstr.FromString(riakMetricsPortName),
 			})
 		}
 		return ports
