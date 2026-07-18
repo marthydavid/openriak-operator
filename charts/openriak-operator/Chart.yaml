@@ -3,9 +3,9 @@ name: openriak-operator
 description: Kubernetes operator for OpenRiak — manages RiakCluster, RiakBucket and RiakUser resources with mTLS certificate authentication via cert-manager.
 type: application
 # Chart version; bumped independently of the operator image (appVersion).
-version: 0.1.1
+version: 0.1.2
 # Operator image tag installed by default.
-appVersion: "0.0.3"
+appVersion: "0.0.4"
 home: https://github.com/marthydavid/openriak-operator
 sources:
   - https://github.com/marthydavid/openriak-operator
