@@ -392,7 +392,11 @@ kubectl exec -it my-cluster-0 -c riak -- riak-admin bucket-type list
 
 ## Performance Tuning
 
-### Development Setup
+### Scaling
+
+Running the operator at fleet scale (dozens of clusters, hundreds of users/buckets)? See [docs/scaling.md](docs/scaling.md) for behaviour notes and a load-test harness (`make scale-test`).
+
+## Development Setup
 
 ```yaml
 spec:
