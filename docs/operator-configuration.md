@@ -114,8 +114,10 @@ Riak has no native Prometheus endpoint — it exposes a JSON document at `GET /s
 port (~470 numeric fields). Enabling monitoring adds a `json_exporter` **sidecar** to every Riak
 pod that translates `/stats` into Prometheus metrics on port 7979, exposes that port on the
 cluster Service, and (when the Prometheus Operator CRDs are present) creates a `ServiceMonitor`.
-Clusters without the Prometheus Operator are supported: the ServiceMonitor is skipped, and the
-`/metrics` endpoint can be scraped directly.
+Clusters without the Prometheus Operator are supported: the ServiceMonitor is skipped, and
+Prometheus can scrape the exporter directly at
+`http://<pod>:7979/probe?module=riak&target=http://127.0.0.1:8098/stats` (the exporter's own
+`/metrics` path serves only json_exporter's internal metrics, not Riak's).
 
 ```yaml
 apiVersion: riak.openriak.io/v1

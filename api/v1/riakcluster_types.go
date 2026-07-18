@@ -79,7 +79,7 @@ type RiakClusterSpec struct {
 // TLSConfig defines TLS settings for the cluster.
 // MonitoringConfig enables a Prometheus metrics sidecar on every Riak pod.
 // The sidecar translates Riak's JSON /stats endpoint into Prometheus metrics
-// (served on port 9198) and, when the Prometheus Operator CRDs are installed,
+// (served on port 7979) and, when the Prometheus Operator CRDs are installed,
 // a ServiceMonitor is created to scrape it.
 type MonitoringConfig struct {
 	// Enabled turns on the metrics exporter sidecar and ServiceMonitor.
