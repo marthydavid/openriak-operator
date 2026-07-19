@@ -42,6 +42,7 @@ spec:
             {{- end }}
             - --health-probe-bind-address=:8081
             - --riak-image={{ .Values.riak.image }}
+            - --max-concurrent-reconciles={{ .Values.maxConcurrentReconciles }}
             {{- if .Values.metrics.enabled }}
             - --metrics-bind-address=:8443
             - --metrics-secure

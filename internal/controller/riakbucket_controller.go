@@ -140,11 +140,13 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
-func (r *RiakBucketReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager. maxConcurrent sets
+// MaxConcurrentReconciles; values < 1 fall back to controller-runtime's default.
+func (r *RiakBucketReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrent int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&riakv1.RiakBucket{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		WithOptions(controllerOptions(maxConcurrent)).
 		Named("riakbucket").
 		Complete(r)
 }
