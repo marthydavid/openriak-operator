@@ -18,36 +18,49 @@ Traced from the reconcilers (`internal/controller`):
 
 ### The two things that bite
 
-1. **Provisioning storms / operator restart.** `MaxConcurrentReconciles` is the
-   controller-runtime default (**1 worker per controller**), so resources are
-   reconciled serially. Each RiakUser create runs
-   `security enable` + `add-user` + `add-source` + one `security grant` per
-   grant — every call is a `kubectl exec` that **spawns a temporary Erlang VM
-   (BEAM) on the Riak node**. Hundreds of users = thousands of serialized
-   exec→BEAM spawns. Frequent BEAM spawns are known to OOM small nodes (it is
-   why the health probes are TCP, not `riak ping`). On an operator restart the
-   whole fleet re-syncs at once.
+1. **Serial reconciles.** `MaxConcurrentReconciles` is the controller-runtime
+   default (**1 worker per controller**), so RiakUsers/Buckets/Clusters are each
+   reconciled one at a time. Hundreds of users apply serially, and on an
+   operator restart the whole fleet re-syncs at once.
 
-2. **Per-node exec cost.** All Riak-side work goes through `kubectl exec`
-   (`internal/riak/executor.go`). This is correct and injection-safe, but it is
-   the dominant cost per operation. Batching grants or holding a longer-lived
-   admin connection would cut it — a larger change, not yet done.
+2. **Per-op `kubectl exec` cost.** All Riak-side work goes through `kubectl exec`
+   (`internal/riak/executor.go`). Each RiakUser create runs
+   `security enable` + `add-user` + `add-source` + one `security grant` per
+   **distinct grant target** (grants on the same target are batched into one
+   call — `Manager.GrantUserPermissions`). Each call is an apiserver `exec`
+   round-trip plus a `riak-admin` invocation.
+
+> **Measured, single node (local):** a `riak-admin security grant`/`add-user`
+> costs **~0.15s** — it uses `nodetool` to attach to the *running* node, it does
+> **not** cold-start a BEAM VM. (That cold-start cost applies to `riak ping` /
+> `riak-admin status`, which is why the health *probes* are TCP, not those
+> commands — a different code path from provisioning.) So grant batching cuts
+> the *number* of serialized ops, not a per-op OOM risk: ~10 grants in 1.7s
+> collapse to one ~0.17s call. The `kubectl exec` apiserver round-trip in a
+> real cluster is likely the larger share and is **not** captured by a local
+> measurement.
+
+**Not yet measured:** end-to-end convergence at fleet scale (dozens of clusters,
+hundreds of users). The dominant costs there are the two above plus **Riak
+StatefulSet boot and ring-join time per cluster** (minutes each), which the
+provisioning path does not affect. Run the harness below on a representative
+multi-node cluster to get real numbers before sizing anything.
 
 ### Recommendations
 
-- **Give Riak nodes headroom.** Size CPU/memory so a burst of `riak-admin` BEAM
-  spawns during provisioning does not OOM them (`spec.resources`).
-- **Provision gradually** where possible, rather than applying hundreds of
-  RiakUsers at once, to smooth the exec storm.
-- **Enable monitoring** (`spec.monitoring.enabled`) and watch node CPU/memory
-  and the operator's `controller_runtime_reconcile_time_seconds` /
-  `workqueue_depth` during rollouts.
+- **Give Riak nodes headroom** (`spec.resources`) — a single node idles around
+  ~120 MB; size for your data and connection load, not for the provisioning
+  path (which is light per op).
+- **Provision gradually** where possible so serial reconciles keep up.
+- **Enable monitoring** (`spec.monitoring.enabled`) and watch the operator's
+  `controller_runtime_reconcile_time_seconds` and `workqueue_depth` during
+  rollouts — that is the real convergence signal.
 - Consider a **namespace-per-tenant** layout so blast radius and RBAC stay
   bounded.
 
-Tuning `MaxConcurrentReconciles` up would speed convergence but multiplies the
-concurrent exec/BEAM load per node — measure before raising it. It is not yet a
-CRD/flag knob.
+Raising `MaxConcurrentReconciles` would speed convergence at the cost of more
+concurrent `kubectl exec` load — measure with the harness before changing it. It
+is not yet a CRD/flag knob.
 
 ## Load-test harness
 

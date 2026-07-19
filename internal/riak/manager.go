@@ -109,14 +109,39 @@ func (m *Manager) CreateBucketType(ctx context.Context, cluster *riakv1.RiakClus
 	return m.executor.CreateBucket(ctx, cluster.Namespace, pod, "riak", bucketType, "", properties)
 }
 
-// GrantUserPermission grants permissions to a user.
-func (m *Manager) GrantUserPermission(ctx context.Context, cluster *riakv1.RiakCluster, username, resource, permission, bucket string) error {
+// GrantUserPermissions applies all of a user's grants, batched by target: one
+// riak-admin security-grant call per distinct (resource, bucket) instead of one
+// per grant. Each riak-admin call spawns a temporary Erlang VM on the node, so
+// this materially cuts provisioning cost for users with several grants and for
+// large fleets. Grouping preserves first-seen order so the emitted commands are
+// deterministic.
+func (m *Manager) GrantUserPermissions(ctx context.Context, cluster *riakv1.RiakCluster, username string, grants []riakv1.Grant) error {
+	if len(grants) == 0 {
+		return nil
+	}
 	if len(cluster.Status.Members) == 0 {
 		return fmt.Errorf("no cluster members available")
 	}
-
 	pod := cluster.Status.Members[0].Pod
-	return m.executor.GrantPermission(ctx, cluster.Namespace, pod, "riak", username, resource, permission, bucket)
+
+	type target struct{ resource, bucket string }
+	var order []target
+	perms := map[target][]string{}
+	for _, g := range grants {
+		t := target{g.Resource, g.BucketName}
+		if _, ok := perms[t]; !ok {
+			order = append(order, t)
+		}
+		perms[t] = append(perms[t], g.Permission)
+	}
+
+	for _, t := range order {
+		if err := m.executor.GrantPermissions(ctx, cluster.Namespace, pod, "riak",
+			username, t.resource, t.bucket, perms[t]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CreateUserForCert creates a Riak user configured for certificate-based authentication.
