@@ -18,6 +18,12 @@ riak:
   # (passed to the operator as --riak-image).
   image: ghcr.io/marthydavid/riak:3.2.6
 
+# Maximum concurrent reconciles per controller (--max-concurrent-reconciles).
+# 1 is the safe default; raise it to speed up provisioning across many
+# clusters/users/buckets, at the cost of more parallel kubectl-exec load on the
+# Riak nodes. Measure before increasing (see docs/scaling.md).
+maxConcurrentReconciles: 1
+
 # Leader election is required when replicaCount > 1.
 leaderElection:
   enabled: true

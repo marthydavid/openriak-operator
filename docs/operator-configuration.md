@@ -6,6 +6,7 @@ set in the manager container args (`config/manager/manager.yaml`).
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--riak-image` | `ghcr.io/marthydavid/riak:3.2.6` | Default Riak operand image used when `spec.image` is not set on a RiakCluster |
+| `--max-concurrent-reconciles` | `1` | Max concurrent reconciles per controller; raise to speed up provisioning at scale (see [scaling.md](scaling.md)) |
 | `--leader-elect` | `false` | Enable leader election (required when running more than one replica) |
 | `--health-probe-bind-address` | `:8081` | Address for the liveness/readiness probe endpoint |
 | `--metrics-bind-address` | `0` (disabled) | Address for the metrics endpoint; `:8443` for HTTPS, `:8080` for HTTP |

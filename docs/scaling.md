@@ -58,9 +58,14 @@ multi-node cluster to get real numbers before sizing anything.
 - Consider a **namespace-per-tenant** layout so blast radius and RBAC stay
   bounded.
 
-Raising `MaxConcurrentReconciles` would speed convergence at the cost of more
-concurrent `kubectl exec` load — measure with the harness before changing it. It
-is not yet a CRD/flag knob.
+**Concurrency knob.** `--max-concurrent-reconciles` (Helm:
+`maxConcurrentReconciles`, default **1**) sets `MaxConcurrentReconciles` for
+every controller. Raising it lets the operator provision many users/buckets in
+parallel instead of one at a time — the most direct lever on serial-reconcile
+convergence. Each extra worker adds parallel `kubectl exec` load on the Riak
+nodes, so raise it gradually and watch node CPU/memory and
+`controller_runtime_reconcile_time_seconds` with the harness before settling on
+a value.
 
 ## Load-test harness
 

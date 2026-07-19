@@ -194,11 +194,13 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
-func (r *RiakUserReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager. maxConcurrent sets
+// MaxConcurrentReconciles; values < 1 fall back to controller-runtime's default.
+func (r *RiakUserReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrent int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&riakv1.RiakUser{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		WithOptions(controllerOptions(maxConcurrent)).
 		Named("riakuser").
 		Complete(r)
 }

@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -576,13 +577,26 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
-// SetupWithManager sets up the controller with the Manager.
-func (r *RiakClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// SetupWithManager sets up the controller with the Manager. maxConcurrent sets
+// MaxConcurrentReconciles; values < 1 fall back to controller-runtime's default.
+func (r *RiakClusterReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrent int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&riakv1.RiakCluster{}).
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
+		WithOptions(controllerOptions(maxConcurrent)).
 		Named("riakcluster").
 		Complete(r)
+}
+
+// controllerOptions builds controller.Options from a max-concurrency value. A
+// value < 1 leaves MaxConcurrentReconciles zero, so controller-runtime applies
+// its default (1).
+func controllerOptions(maxConcurrent int) controller.Options {
+	opts := controller.Options{}
+	if maxConcurrent > 0 {
+		opts.MaxConcurrentReconciles = maxConcurrent
+	}
+	return opts
 }

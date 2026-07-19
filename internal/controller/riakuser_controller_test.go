@@ -620,7 +620,7 @@ var _ = Describe("RiakUser Controller", func() {
 			mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: k8sClient.Scheme()})
 			Expect(err).NotTo(HaveOccurred())
 			r := &RiakUserReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme()}
-			Expect(r.SetupWithManager(mgr)).To(Succeed())
+			Expect(r.SetupWithManager(mgr, 2)).To(Succeed())
 		})
 	})
 })

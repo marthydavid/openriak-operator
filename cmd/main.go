@@ -59,6 +59,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var riakImage string
+	var maxConcurrentReconciles int
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -72,6 +73,10 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&riakImage, "riak-image", "ghcr.io/marthydavid/riak:3.2.6",
 		"Default Riak operand image used when spec.image is not set on a RiakCluster resource.")
+	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 1,
+		"Maximum number of concurrent reconciles per controller. Raise it to speed up "+
+			"provisioning across many clusters/users/buckets; each concurrent worker adds "+
+			"parallel kubectl-exec load on the Riak nodes, so measure before increasing.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -151,21 +156,21 @@ func main() {
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		DefaultImage: riakImage,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, maxConcurrentReconciles); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RiakCluster")
 		os.Exit(1)
 	}
 	if err = (&controller.RiakBucketReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, maxConcurrentReconciles); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RiakBucket")
 		os.Exit(1)
 	}
 	if err = (&controller.RiakUserReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, maxConcurrentReconciles); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RiakUser")
 		os.Exit(1)
 	}
