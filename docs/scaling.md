@@ -65,7 +65,7 @@ parallel instead of one at a time — the most direct lever on serial-reconcile
 convergence. Each extra worker adds parallel `kubectl exec` load on the Riak
 nodes, so raise it gradually and watch node CPU/memory and
 `controller_runtime_reconcile_time_seconds` with the harness before settling on
-a value.
+a value. A value below `1` falls back to the controller-runtime default (1).
 
 ## Load-test harness
 
