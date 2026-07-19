@@ -22,8 +22,9 @@ Traced from the reconcilers (`internal/controller`):
    controller-runtime default (**1 worker per controller**), so resources are
    reconciled serially. Each RiakUser create runs
    `security enable` + `add-user` + `add-source` + one `security grant` per
-   grant — every call is a `kubectl exec` that **spawns a temporary Erlang VM
-   (BEAM) on the Riak node**. Hundreds of users = thousands of serialized
+   distinct grant target (grants on the same target are batched into a single
+   call) — every call is a `kubectl exec` that **spawns a temporary Erlang VM
+   (BEAM) on the Riak node**. Hundreds of users = hundreds of serialized
    exec→BEAM spawns. Frequent BEAM spawns are known to OOM small nodes (it is
    why the health probes are TCP, not `riak ping`). On an operator restart the
    whole fleet re-syncs at once.

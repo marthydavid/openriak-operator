@@ -335,6 +335,35 @@ func TestGrantPermissions_dedupesAndJoins(t *testing.T) {
 	}
 }
 
+func TestGrantPermissions_rejectsEmptyBucketTarget(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
+	e := newTestExecutor(runner)
+
+	// A bucket grant with no bucket must error, not silently grant "on any".
+	err := e.GrantPermissions(context.Background(), "ns", "pod", "riak", "alice",
+		"bucket", "", []string{"read"})
+	if err == nil || !strings.Contains(err.Error(), "bucket target") {
+		t.Fatalf("expected bucket-target error, got %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected no security grant call, got %d", len(*calls))
+	}
+}
+
+func TestGrantPermissions_rejectsUnknownResource(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security grant": ""}, nil)
+	e := newTestExecutor(runner)
+
+	err := e.GrantPermissions(context.Background(), "ns", "pod", "riak", "alice",
+		"everything", "", []string{"read"})
+	if err == nil || !strings.Contains(err.Error(), "unknown grant resource") {
+		t.Fatalf("expected unknown-resource error, got %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected no security grant call, got %d", len(*calls))
+	}
+}
+
 // ---------- GrantPermission ----------
 
 func TestGrantPermission_nosBucket(t *testing.T) {

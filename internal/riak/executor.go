@@ -200,9 +200,20 @@ func (e *Executor) GrantPermission(ctx context.Context, namespace, podName, cont
 // are de-duplicated with a stable order so the pod template / command is
 // deterministic.
 func (e *Executor) GrantPermissions(ctx context.Context, namespace, podName, containerName, username, resource, bucket string, permissions []string) error {
-	target := []string{"any"}
-	if resource == "bucket" && bucket != "" {
+	// Resolve the grant target. A "bucket" resource with an empty bucket must
+	// NOT fall through to "on any" — that would silently grant cluster-wide
+	// access. Reject it, and reject unknown resources, instead.
+	var target []string
+	switch resource {
+	case "any":
+		target = []string{"any"}
+	case "bucket":
+		if bucket == "" {
+			return fmt.Errorf("bucket grant requires a bucket target")
+		}
 		target = strings.Fields(bucket)
+	default:
+		return fmt.Errorf("unknown grant resource %q", resource)
 	}
 
 	seen := map[string]bool{}
