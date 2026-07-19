@@ -340,10 +340,12 @@ func TestGrantPermissions_rejectsEmptyBucketTarget(t *testing.T) {
 	e := newTestExecutor(runner)
 
 	// A bucket grant with no bucket must error, not silently grant "on any".
-	err := e.GrantPermissions(context.Background(), "ns", "pod", "riak", "alice",
-		"bucket", "", []string{"read"})
-	if err == nil || !strings.Contains(err.Error(), "bucket target") {
-		t.Fatalf("expected bucket-target error, got %v", err)
+	for _, bad := range []string{"", "   "} {
+		err := e.GrantPermissions(context.Background(), "ns", "pod", "riak", "alice",
+			"bucket", bad, []string{"read"})
+		if err == nil || !strings.Contains(err.Error(), "bucket target") {
+			t.Fatalf("bucket=%q: expected bucket-target error, got %v", bad, err)
+		}
 	}
 	if len(*calls) != 0 {
 		t.Errorf("expected no security grant call, got %d", len(*calls))

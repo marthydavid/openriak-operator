@@ -208,10 +208,12 @@ func (e *Executor) GrantPermissions(ctx context.Context, namespace, podName, con
 	case "any":
 		target = []string{"any"}
 	case "bucket":
-		if bucket == "" {
+		// strings.Fields also collapses a whitespace-only bucket to an empty
+		// target, so validate the parsed result rather than the raw string.
+		target = strings.Fields(bucket)
+		if len(target) == 0 {
 			return fmt.Errorf("bucket grant requires a bucket target")
 		}
-		target = strings.Fields(bucket)
 	default:
 		return fmt.Errorf("unknown grant resource %q", resource)
 	}
