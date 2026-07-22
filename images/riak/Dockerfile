@@ -69,11 +69,21 @@ RUN yum install -y procps-ng shadow-utils hostname findutils tar gzip \
 ARG TARGETARCH
 FROM base-${TARGETARCH}
 
-# Ensure directories are writable by the riak user.
+# Ensure directories are writable by the riak user and by an arbitrary
+# OpenShift-assigned UID.
 # /var/run/riak is the hardcoded PID_DIR used by `riak start` (daemon mode) and is
 # not creatable by the non-root riak user at runtime, so pre-create it here.
+#
+# OpenShift's restricted-v2 SCC ignores the image USER and runs the container as
+# an arbitrary non-root UID whose only supplementary group is 0 (root). Assign
+# these runtime-writable dirs to group 0 and make them group-writable (g=u grants
+# the root group the owner's permissions) so any assigned UID can write to the
+# ephemeral /etc/riak, /var/log/riak and /var/run/riak (an fsGroup mount only
+# covers the /var/lib/riak PVC). This is a no-op on vanilla Kubernetes, where the
+# container still runs as USER riak and writes as the owner.
 RUN mkdir -p /var/run/riak \
-    && chown -R riak:riak /etc/riak /var/lib/riak /var/log/riak /var/run/riak
+    && chown -R riak:0 /etc/riak /var/lib/riak /var/log/riak /var/run/riak \
+    && chmod -R g=u    /etc/riak /var/lib/riak /var/log/riak /var/run/riak
 
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh
