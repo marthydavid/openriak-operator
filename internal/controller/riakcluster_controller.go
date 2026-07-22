@@ -283,8 +283,8 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 
 	resources := &corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse("500m"),
-			corev1.ResourceMemory: resource.MustParse("1Gi"),
+			corev1.ResourceCPU:    resource.MustParse("1"),
+			corev1.ResourceMemory: resource.MustParse("2Gi"),
 		},
 	}
 	if cluster.Spec.Resources != nil {
@@ -395,10 +395,12 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 										Port: intstr.FromString("protobuf"),
 									},
 								},
-								InitialDelaySeconds: 30,
+								// Generous: 60s warm-up + 6×10s = 60s grace, so a briefly
+								// busy node (GC/AAE/security ops under load) is not SIGKILLed.
+								InitialDelaySeconds: 60,
 								PeriodSeconds:       10,
 								TimeoutSeconds:      5,
-								FailureThreshold:    3,
+								FailureThreshold:    6,
 							},
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
