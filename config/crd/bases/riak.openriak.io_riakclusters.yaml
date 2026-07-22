@@ -39,6 +39,14 @@ spec:
           spec:
             description: RiakClusterSpec defines the desired state of RiakCluster.
             properties:
+              ephemeralStorage:
+                description: |-
+                  EphemeralStorage, when true, backs each Riak node's data directory with an
+                  emptyDir volume instead of a PersistentVolumeClaim. Data does NOT survive
+                  pod restarts. Intended for testing/CI on clusters without a dynamic storage
+                  provisioner; not for production. When set, StorageClassName and StorageSize
+                  are ignored for data-volume provisioning.
+                type: boolean
               image:
                 description: |-
                   Image is the Riak Docker image to use (e.g., ghcr.io/marthydavid/riak:3.2.6).

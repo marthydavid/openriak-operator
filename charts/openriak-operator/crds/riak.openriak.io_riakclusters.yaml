@@ -39,6 +39,14 @@ spec:
           spec:
             description: RiakClusterSpec defines the desired state of RiakCluster.
             properties:
+              ephemeralStorage:
+                description: |-
+                  EphemeralStorage, when true, backs each Riak node's data directory with an
+                  emptyDir volume instead of a PersistentVolumeClaim. Data does NOT survive
+                  pod restarts. Intended for testing/CI on clusters without a dynamic storage
+                  provisioner; not for production. When set, StorageClassName and StorageSize
+                  are ignored for data-volume provisioning.
+                type: boolean
               image:
                 description: |-
                   Image is the Riak Docker image to use (e.g., ghcr.io/marthydavid/riak:3.2.6).
@@ -48,6 +56,21 @@ spec:
               imagePullPolicy:
                 description: ImagePullPolicy defines how the image should be pulled.
                 type: string
+              monitoring:
+                description: Monitoring configures Prometheus metrics for the Riak
+                  nodes.
+                properties:
+                  enabled:
+                    description: Enabled turns on the metrics exporter sidecar and
+                      ServiceMonitor.
+                    type: boolean
+                  exporterImage:
+                    description: ExporterImage overrides the json_exporter sidecar
+                      image.
+                    type: string
+                required:
+                - enabled
+                type: object
               nodeSelector:
                 additionalProperties:
                   type: string
@@ -115,7 +138,20 @@ spec:
               riakConfig:
                 additionalProperties:
                   type: string
-                description: RiakConfig is the riak.conf configuration for all nodes.
+                description: |-
+                  RiakConfig sets arbitrary riak.conf keys on all nodes. Any key from the
+                  Riak configuration reference works, e.g.:
+                    storage_backend: memory
+                    memory_backend.ttl: 60s
+                    memory_backend.max_memory_per_vnode: 128MB
+                    multi_backend.mem_ttl.storage_backend: memory
+                  Changing values rolls the StatefulSet so nodes restart with the new
+                  configuration. WARNING: changing storage_backend (or a bucket's backend
+                  binding) on a cluster with data does NOT migrate that data — objects
+                  written to the previous backend become unreachable. Plan a backup or
+                  migration before switching backends on a live cluster.
+                  Bind buckets to a multi_backend entry via
+                  RiakBucket.spec.properties ("backend": "<name>").
                 type: object
               servicePort:
                 description: ServicePort is the port for the Riak protocol service.

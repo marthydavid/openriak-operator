@@ -184,6 +184,45 @@ var _ = Describe("RiakCluster Controller", func() {
 		})
 	})
 
+	Context("ephemeral storage", func() {
+		const clusterName = "ephemeral-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		It("uses an emptyDir data volume and no PVC template", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec: riakv1.RiakClusterSpec{
+					Size:             1,
+					Image:            "basho/riak-kv:latest",
+					EphemeralStorage: true,
+				},
+			})).To(Succeed())
+
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+
+			// No PVC template is emitted for ephemeral clusters.
+			Expect(sts.Spec.VolumeClaimTemplates).To(BeEmpty())
+
+			// An emptyDir "data" volume backs the mount at /var/lib/riak.
+			var dataVol *corev1.Volume
+			for i := range sts.Spec.Template.Spec.Volumes {
+				if sts.Spec.Template.Spec.Volumes[i].Name == "data" {
+					dataVol = &sts.Spec.Template.Spec.Volumes[i]
+				}
+			}
+			Expect(dataVol).NotTo(BeNil(), "expected an emptyDir 'data' volume")
+			Expect(dataVol.EmptyDir).NotTo(BeNil())
+			Expect(sts.Spec.Template.Spec.Containers[0].VolumeMounts).To(ContainElement(
+				corev1.VolumeMount{Name: "data", MountPath: "/var/lib/riak"}))
+		})
+	})
+
 	Context("cluster deletion", func() {
 		const clusterName = "delete-cluster"
 		nn := types.NamespacedName{Name: clusterName, Namespace: ns}

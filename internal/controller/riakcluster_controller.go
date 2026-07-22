@@ -307,12 +307,41 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 	if monitoringEnabled(cluster) {
 		podVolumes = append(podVolumes, exporterConfigVolume(cluster))
 	}
+	// Ephemeral storage backs the data dir with an emptyDir instead of a PVC, for
+	// test clusters without a dynamic provisioner. emptyDir is one of the few
+	// volume types OpenShift's restricted-v2 SCC permits without extra grants.
+	if cluster.Spec.EphemeralStorage {
+		podVolumes = append(podVolumes, corev1.Volume{
+			Name:         "data",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+	}
 
 	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      cluster.Name,
 			Namespace: cluster.Namespace,
 		},
+	}
+
+	// A PersistentVolumeClaim template is used only for durable storage; ephemeral
+	// clusters get their emptyDir "data" volume from podVolumes above instead.
+	var volumeClaimTemplates []corev1.PersistentVolumeClaim
+	if !cluster.Spec.EphemeralStorage {
+		volumeClaimTemplates = []corev1.PersistentVolumeClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "data"},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					StorageClassName: &cluster.Spec.StorageClassName,
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: storageSize,
+						},
+					},
+				},
+			},
+		}
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
@@ -401,20 +430,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 					},
 				},
 			},
-			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
-				{
-					ObjectMeta: metav1.ObjectMeta{Name: "data"},
-					Spec: corev1.PersistentVolumeClaimSpec{
-						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-						StorageClassName: &cluster.Spec.StorageClassName,
-						Resources: corev1.VolumeResourceRequirements{
-							Requests: corev1.ResourceList{
-								corev1.ResourceStorage: storageSize,
-							},
-						},
-					},
-				},
-			},
+			VolumeClaimTemplates: volumeClaimTemplates,
 		}
 
 		return controllerutil.SetControllerReference(cluster, sts, r.Scheme)
