@@ -24,6 +24,12 @@ set -eo pipefail
 # the container before Riak starts. /var/run/riak and directory ownership
 # are baked into the image at build time (Dockerfile, as root).
 
+# Raise the open-file soft limit to Riak's recommended 65536. Containers default
+# it to 1024 (CRI-O), which throttles Riak under load and logs a startup warning.
+# The hard limit is high enough that raising the soft limit needs no privileges;
+# ignore failure if the hard cap happens to be lower than 65536.
+ulimit -n 65536 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # Node identity
 # Prefer DNS-based names (stable across pod restarts) when the StatefulSet

@@ -46,6 +46,14 @@ type RiakClusterSpec struct {
 	// StorageSize is the size of storage for each Riak node (e.g., 10Gi).
 	StorageSize *resource.Quantity `json:"storageSize,omitempty"`
 
+	// EphemeralStorage, when true, backs each Riak node's data directory with an
+	// emptyDir volume instead of a PersistentVolumeClaim. Data does NOT survive
+	// pod restarts. Intended for testing/CI on clusters without a dynamic storage
+	// provisioner; not for production. When set, StorageClassName and StorageSize
+	// are ignored for data-volume provisioning.
+	// +optional
+	EphemeralStorage bool `json:"ephemeralStorage,omitempty"`
+
 	// RiakConfig sets arbitrary riak.conf keys on all nodes. Any key from the
 	// Riak configuration reference works, e.g.:
 	//   storage_backend: memory
@@ -122,6 +130,13 @@ type RiakClusterStatus struct {
 
 	// Members is a list of current cluster members.
 	Members []RiakNodeMember `json:"members,omitempty"`
+
+	// SecurityEnabled records that Riak security has been enabled on the cluster.
+	// It is enabled once (when the first cert-auth user is created), not per user:
+	// repeatedly running `riak-admin security enable` on a live node bounces its
+	// client listeners and destabilises it under load.
+	// +optional
+	SecurityEnabled bool `json:"securityEnabled,omitempty"`
 }
 
 // ClusterPhase is the phase of cluster lifecycle.

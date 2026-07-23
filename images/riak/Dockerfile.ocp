@@ -1,0 +1,43 @@
+# Single-arch (amd64) Riak KV 3.2.6 operand image for in-cluster OpenShift builds.
+#
+# Flattened from images/riak/Dockerfile's base-amd64 + common stages (UBI8 + the
+# RHEL x86_64 RPM). The multi-arch Dockerfile is written for buildx; OpenShift's
+# buildah builds every stage, including the aarch64 (amazonlinux) one, which fails
+# on an amd64 build node. This single-stage file avoids that. It also carries the
+# restricted-v2 fix (group-0 ownership + g=u) so the operand runs under OpenShift's
+# default SCC as an arbitrary UID without any SCC grant.
+FROM registry.access.redhat.com/ubi8/ubi
+
+ARG RHEL_VERSION=8
+ARG AMD64_RPM_URL=https://files.tiot.jp/riak/kv/3.2/3.2.6/rhel/8/riak-3.2.6.OTP24-1.el8.x86_64.rpm
+ARG AMD64_RPM_SHA256=63363abccafe83db9d440a9968dc436a0cd2753d0665093aff6d1a556f3e2c05
+
+# EPEL satisfies the /usr/bin/escript dependency declared by the Riak RPM spec
+# (provided by erlang-erts). Riak bundles its own OTP runtime; erlang-erts is only
+# needed for the RPM dependency check. procps-ng: `ps` for riak scripts.
+RUN dnf install -y \
+        "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${RHEL_VERSION}.noarch.rpm" \
+    && dnf install -y \
+        procps-ng \
+        erlang-erts \
+    && curl -fsSLo /tmp/riak.rpm "${AMD64_RPM_URL}" \
+    && echo "${AMD64_RPM_SHA256}  /tmp/riak.rpm" | sha256sum -c - \
+    && dnf install -y /tmp/riak.rpm \
+    && rm -f /tmp/riak.rpm \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Own the runtime-writable dirs by group 0 and make them group-writable so an
+# arbitrary UID assigned by OpenShift's restricted-v2 SCC (always in group 0) can
+# write riak.conf, logs and the PID. No-op on vanilla k8s (runs as USER riak).
+RUN mkdir -p /var/run/riak \
+    && chown -R riak:0 /etc/riak /var/lib/riak /var/log/riak /var/run/riak \
+    && chmod -R g=u    /etc/riak /var/lib/riak /var/log/riak /var/run/riak
+
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+
+VOLUME ["/var/lib/riak"]
+EXPOSE 8087 8098
+USER riak
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

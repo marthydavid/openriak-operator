@@ -59,6 +59,7 @@ type opts struct {
 	timeout   time.Duration
 	poll      time.Duration
 	keep      bool
+	ephemeral bool
 }
 
 func main() {
@@ -72,6 +73,8 @@ func main() {
 	flag.DurationVar(&o.timeout, "timeout", 20*time.Minute, "overall deadline for everything to reach Ready")
 	flag.DurationVar(&o.poll, "poll", 5*time.Second, "status poll interval")
 	flag.BoolVar(&o.keep, "keep", false, "keep resources after the run instead of deleting them")
+	flag.BoolVar(&o.ephemeral, "ephemeral", false,
+		"use emptyDir (spec.ephemeralStorage) instead of PVCs; for clusters without a storage provisioner")
 	flag.Parse()
 
 	if err := run(o); err != nil {
@@ -152,14 +155,19 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 	for i := 0; i < o.clusters; i++ {
 		cl := fmt.Sprintf("scale-c%03d", i)
 		size := int32(1)
+		spec := riakv1.RiakClusterSpec{
+			Size:       size,
+			Image:      o.image,
+			RiakConfig: map[string]string{"ring_size": "8"},
+		}
+		if o.ephemeral {
+			spec.EphemeralStorage = true
+		} else {
+			spec.StorageClassName = o.storage
+		}
 		cluster := &riakv1.RiakCluster{
 			ObjectMeta: metav1.ObjectMeta{Name: cl, Namespace: o.namespace},
-			Spec: riakv1.RiakClusterSpec{
-				Size:             size,
-				Image:            o.image,
-				StorageClassName: o.storage,
-				RiakConfig:       map[string]string{"ring_size": "8"},
-			},
+			Spec:       spec,
 		}
 		if err := c.Create(ctx, cluster); err != nil && !apiAlreadyExists(err) {
 			return fmt.Errorf("create %s: %w", cl, err)

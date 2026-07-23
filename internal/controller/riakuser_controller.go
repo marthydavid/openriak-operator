@@ -49,6 +49,7 @@ type RiakUserReconciler struct {
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakusers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakusers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
@@ -143,6 +144,30 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			log.Error(updateErr, "failed to update user status")
 		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	// Enable Riak security once per cluster, not per user. Repeatedly running
+	// `riak-admin security enable` on a live node bounces its client listeners and
+	// destabilises it under load, so guard it with the cluster's status flag.
+	if !cluster.Status.SecurityEnabled {
+		if err := manager.EnableSecurity(ctx, cluster); err != nil {
+			log.Error(err, "failed to enable cluster security", "cluster", cluster.Name)
+			user.Status.Phase = riakv1.UserPhaseFailed
+			user.Status.Error = fmt.Sprintf("failed to enable security: %v", err)
+			user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+			if updateErr := r.Status().Update(ctx, user); updateErr != nil {
+				log.Error(updateErr, "failed to update user status")
+			}
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+		cluster.Status.SecurityEnabled = true
+		if err := r.Status().Update(ctx, cluster); err != nil {
+			// The enable succeeded; only the flag write failed (e.g. a conflicting
+			// cluster status update). Requeue to retry — EnableSecurity is idempotent,
+			// so re-running it once on retry is harmless.
+			log.Error(err, "failed to record cluster SecurityEnabled; requeuing")
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
 	}
 
 	if err := manager.CreateUserForCert(ctx, cluster, user.Spec.Username); err != nil {
