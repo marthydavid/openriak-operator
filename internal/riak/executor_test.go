@@ -439,7 +439,7 @@ func TestGrantPermission_propagatesError(t *testing.T) {
 
 // ---------- CreateUserForCert ----------
 
-func TestCreateUserForCert_enablesSecurityAndAddsUserWithoutPassword(t *testing.T) {
+func TestCreateUserForCert_addsUserWithoutEnableOrPassword(t *testing.T) {
 	runner, calls := mockRunner(map[string]string{"security": ""}, nil)
 	e := newTestExecutor(runner)
 
@@ -447,8 +447,7 @@ func TestCreateUserForCert_enablesSecurityAndAddsUserWithoutPassword(t *testing.
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var hasEnable, hasAddUser bool
-	var passwordArg bool
+	var hasEnable, hasAddUser, passwordArg bool
 	for _, c := range *calls {
 		joined := strings.Join(c.args, " ")
 		if strings.Contains(joined, "security enable") {
@@ -461,8 +460,8 @@ func TestCreateUserForCert_enablesSecurityAndAddsUserWithoutPassword(t *testing.
 			}
 		}
 	}
-	if !hasEnable {
-		t.Error("expected 'security enable' call")
+	if hasEnable {
+		t.Error("CreateUserForCert must not enable security (enabled once per cluster)")
 	}
 	if !hasAddUser {
 		t.Error("expected 'add-user certuser' call")
@@ -472,7 +471,28 @@ func TestCreateUserForCert_enablesSecurityAndAddsUserWithoutPassword(t *testing.
 	}
 }
 
-func TestCreateUserForCert_failsOnEnableError(t *testing.T) {
+// ---------- EnableSecurity ----------
+
+func TestEnableSecurity_runsSecurityEnable(t *testing.T) {
+	runner, calls := mockRunner(map[string]string{"security": ""}, nil)
+	e := newTestExecutor(runner)
+
+	if err := e.EnableSecurity(context.Background(), "ns", "pod", "riak"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var hasEnable bool
+	for _, c := range *calls {
+		if strings.Contains(strings.Join(c.args, " "), "security enable") {
+			hasEnable = true
+		}
+	}
+	if !hasEnable {
+		t.Error("expected 'security enable' call")
+	}
+}
+
+func TestEnableSecurity_failsOnEnableError(t *testing.T) {
 	runner := func(_ context.Context, _ string, args ...string) (string, error) {
 		if strings.Contains(strings.Join(args, " "), "security enable") {
 			return "", errors.New("network timeout")
@@ -481,12 +501,12 @@ func TestCreateUserForCert_failsOnEnableError(t *testing.T) {
 	}
 	e := newTestExecutor(runner)
 
-	if err := e.CreateUserForCert(context.Background(), "ns", "pod", "riak", "certuser"); err == nil {
+	if err := e.EnableSecurity(context.Background(), "ns", "pod", "riak"); err == nil {
 		t.Fatal("expected error from non-already enable failure, got nil")
 	}
 }
 
-func TestCreateUserForCert_ignoresAlreadyEnabledError(t *testing.T) {
+func TestEnableSecurity_ignoresAlreadyEnabledError(t *testing.T) {
 	runner := func(_ context.Context, _ string, args ...string) (string, error) {
 		if strings.Contains(strings.Join(args, " "), "security enable") {
 			return "", errors.New("security already enabled")
@@ -495,7 +515,7 @@ func TestCreateUserForCert_ignoresAlreadyEnabledError(t *testing.T) {
 	}
 	e := newTestExecutor(runner)
 
-	if err := e.CreateUserForCert(context.Background(), "ns", "pod", "riak", "certuser"); err != nil {
+	if err := e.EnableSecurity(context.Background(), "ns", "pod", "riak"); err != nil {
 		t.Fatalf("unexpected error for already-enabled: %v", err)
 	}
 }

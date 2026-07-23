@@ -130,6 +130,13 @@ type RiakClusterStatus struct {
 
 	// Members is a list of current cluster members.
 	Members []RiakNodeMember `json:"members,omitempty"`
+
+	// SecurityEnabled records that Riak security has been enabled on the cluster.
+	// It is enabled once (when the first cert-auth user is created), not per user:
+	// repeatedly running `riak-admin security enable` on a live node bounces its
+	// client listeners and destabilises it under load.
+	// +optional
+	SecurityEnabled bool `json:"securityEnabled,omitempty"`
 }
 
 // ClusterPhase is the phase of cluster lifecycle.

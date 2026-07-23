@@ -154,6 +154,19 @@ func (m *Manager) CreateUserForCert(ctx context.Context, cluster *riakv1.RiakClu
 	return m.executor.CreateUserForCert(ctx, cluster.Namespace, pod, "riak", username)
 }
 
+// EnableSecurity enables Riak's security subsystem on the cluster. It is run once
+// per cluster (guarded by RiakCluster.Status.SecurityEnabled), not per user,
+// because repeatedly toggling security on a live node bounces its client listeners
+// and destabilises it under load.
+func (m *Manager) EnableSecurity(ctx context.Context, cluster *riakv1.RiakCluster) error {
+	if len(cluster.Status.Members) == 0 {
+		return fmt.Errorf("no cluster members available")
+	}
+
+	pod := cluster.Status.Members[0].Pod
+	return m.executor.EnableSecurity(ctx, cluster.Namespace, pod, "riak")
+}
+
 // AddSecuritySource registers the certificate security source for a user.
 func (m *Manager) AddSecuritySource(ctx context.Context, cluster *riakv1.RiakCluster, username string) error {
 	if len(cluster.Status.Members) == 0 {

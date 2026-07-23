@@ -140,13 +140,23 @@ func (e *Executor) CreateBucket(ctx context.Context, namespace, podName, contain
 // The user is still created in the security system; a separate AddSecuritySource call configures
 // the certificate source so Riak accepts client certs with CN == username.
 func (e *Executor) CreateUserForCert(ctx context.Context, namespace, podName, containerName, username string) error {
+	// Security must already be enabled on the cluster (see EnableSecurity); it is
+	// enabled once per cluster rather than here, per user.
+	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "add-user", username)
+	return err
+}
+
+// EnableSecurity turns on Riak's security subsystem. "already enabled" is treated
+// as success, but this must be run sparingly: repeatedly toggling security on a
+// live node bounces its client listeners and destabilises the node under load, so
+// callers enable it once per cluster (guarded by RiakCluster.Status.SecurityEnabled),
+// not once per user.
+func (e *Executor) EnableSecurity(ctx context.Context, namespace, podName, containerName string) error {
 	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "enable")
 	if err != nil && !strings.Contains(err.Error(), "already") {
 		return err
 	}
-
-	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "add-user", username)
-	return err
+	return nil
 }
 
 // AddSecuritySource registers the certificate security source for a user:
