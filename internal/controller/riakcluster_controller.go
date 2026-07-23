@@ -344,6 +344,26 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 		}
 	}
 
+	// StatefulSet.spec.volumeClaimTemplates is immutable, so toggling
+	// EphemeralStorage on an existing cluster (durable↔ephemeral) can never take
+	// effect: CreateOrUpdate would loop forever on a "Forbidden: updates to
+	// statefulset spec ... are forbidden" error. Detect the mismatch up front and
+	// fail fast with an actionable message instead. An existing StatefulSet with no
+	// "data" PVC template is the ephemeral case.
+	existing := &appsv1.StatefulSet{}
+	if getErr := r.Get(ctx, client.ObjectKeyFromObject(sts), existing); getErr == nil {
+		existingEphemeral := !hasDataVolumeClaim(existing.Spec.VolumeClaimTemplates)
+		if existingEphemeral != cluster.Spec.EphemeralStorage {
+			return fmt.Errorf(
+				"storage mode is immutable: StatefulSet %q was created with ephemeralStorage=%t "+
+					"and cannot be switched to %t (StatefulSet volumeClaimTemplates are immutable); "+
+					"delete and recreate the cluster to change storage modes",
+				cluster.Name, existingEphemeral, cluster.Spec.EphemeralStorage)
+		}
+	} else if !apierrors.IsNotFound(getErr) {
+		return getErr
+	}
+
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		sts.Spec = appsv1.StatefulSetSpec{
 			ServiceName: cluster.Name + "-headless",
@@ -444,6 +464,18 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 	}
 
 	return nil
+}
+
+// hasDataVolumeClaim reports whether a StatefulSet's volumeClaimTemplates
+// includes the "data" PVC, i.e. it was provisioned with durable storage. Its
+// absence identifies an ephemeral (emptyDir-backed) cluster.
+func hasDataVolumeClaim(templates []corev1.PersistentVolumeClaim) bool {
+	for _, t := range templates {
+		if t.Name == "data" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RiakClusterReconciler) reconcileService(ctx context.Context, cluster *riakv1.RiakCluster) error {

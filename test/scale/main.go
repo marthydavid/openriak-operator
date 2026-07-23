@@ -73,7 +73,8 @@ func main() {
 	flag.DurationVar(&o.timeout, "timeout", 20*time.Minute, "overall deadline for everything to reach Ready")
 	flag.DurationVar(&o.poll, "poll", 5*time.Second, "status poll interval")
 	flag.BoolVar(&o.keep, "keep", false, "keep resources after the run instead of deleting them")
-	flag.BoolVar(&o.ephemeral, "ephemeral", false, "use emptyDir (spec.ephemeralStorage) instead of PVCs — for clusters without a storage provisioner")
+	flag.BoolVar(&o.ephemeral, "ephemeral", false,
+		"use emptyDir (spec.ephemeralStorage) instead of PVCs; for clusters without a storage provisioner")
 	flag.Parse()
 
 	if err := run(o); err != nil {
