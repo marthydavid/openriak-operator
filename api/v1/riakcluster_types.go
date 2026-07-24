@@ -122,6 +122,9 @@ type RiakClusterStatus struct {
 	// ReadyNodes is the number of ready nodes.
 	ReadyNodes int32 `json:"readyNodes,omitempty"`
 
+	// TotalNodes is the total number of nodes in the cluster.
+	TotalNodes int32 `json:"totalNodes,omitempty"`
+
 	// Conditions represent the latest observed conditions.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
@@ -137,17 +140,94 @@ type RiakClusterStatus struct {
 	// client listeners and destabilises it under load.
 	// +optional
 	SecurityEnabled bool `json:"securityEnabled,omitempty"`
+
+	// StorageClassName is the storage class name currently in use.
+	StorageClassName string `json:"storageClassName,omitempty"`
+
+	// StorageSize is the storage size currently configured.
+	StorageSize string `json:"storageSize,omitempty"`
+
+	// EphemeralStorage indicates if ephemeral storage is in use.
+	EphemeralStorage bool `json:"ephemeralStorage,omitempty"`
+
+	// TLSStatus indicates the TLS configuration status.
+	TLSStatus TLSStatus `json:"tlsStatus,omitempty"`
+
+	// MonitoringStatus indicates the monitoring configuration status.
+	MonitoringStatus MonitoringStatus `json:"monitoringStatus,omitempty"`
+
+	// Buckets is a list of buckets created in this cluster.
+	Buckets []RiakBucketRef `json:"buckets,omitempty"`
+
+	// Users is a list of users created in this cluster.
+	Users []RiakUserRef `json:"users,omitempty"`
+
+	// NodeConditions contains detailed conditions for each node.
+	NodeConditions []NodeCondition `json:"nodeConditions,omitempty"`
 }
 
-// ClusterPhase is the phase of cluster lifecycle.
-type ClusterPhase string
+// TLSStatus indicates the TLS configuration status.
+type TLSStatus struct {
+	// Enabled indicates if TLS is enabled.
+	Enabled bool `json:"enabled,omitempty"`
 
-const (
-	PhaseCreating ClusterPhase = "Creating"
-	PhaseReady    ClusterPhase = "Ready"
-	PhaseUpdating ClusterPhase = "Updating"
-	PhaseFailed   ClusterPhase = "Failed"
-)
+	// CertManagerReady indicates if cert-manager certificates are ready.
+	CertManagerReady bool `json:"certManagerReady,omitempty"`
+
+	// CertManagerError contains error details if certificate provisioning failed.
+	CertManagerError string `json:"certManagerError,omitempty"`
+
+	// InterNodeReady indicates if inter-node TLS is ready.
+	InterNodeReady bool `json:"interNodeReady,omitempty"`
+
+	// ClientReady indicates if client TLS is ready.
+	ClientReady bool `json:"clientReady,omitempty"`
+}
+
+// MonitoringStatus indicates the monitoring configuration status.
+type MonitoringStatus struct {
+	// Enabled indicates if monitoring is enabled.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// ExporterReady indicates if the metrics exporter sidecar is ready.
+	ExporterReady bool `json:"exporterReady,omitempty"`
+
+	// ServiceMonitorReady indicates if the ServiceMonitor is ready (when using Prometheus Operator).
+	ServiceMonitorReady bool `json:"serviceMonitorReady,omitempty"`
+
+	// ExporterError contains error details if the exporter failed to start.
+	ExporterError string `json:"exporterError,omitempty"`
+}
+
+// NodeCondition represents the condition of a single node.
+type NodeCondition struct {
+	// Name is the node name.
+	Name string `json:"name,omitempty"`
+
+	// Ready indicates if the node is ready.
+	Ready bool `json:"ready,omitempty"`
+
+	// Health is the health status of the node.
+	Health string `json:"health,omitempty"`
+
+	// Phase is the lifecycle phase of the node.
+	Phase string `json:"phase,omitempty"`
+
+	// PodName is the Kubernetes Pod name.
+	PodName string `json:"podName,omitempty"`
+
+	// StorageReady indicates if the node's storage is ready.
+	StorageReady bool `json:"storageReady,omitempty"`
+
+	// StorageClassName is the storage class name in use.
+	StorageClassName string `json:"storageClassName,omitempty"`
+
+	// StorageSize is the storage size configured.
+	StorageSize string `json:"storageSize,omitempty"`
+
+	// Conditions contains detailed conditions for this node.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
 
 // RiakNodeMember represents a cluster member node.
 type RiakNodeMember struct {
@@ -162,6 +242,79 @@ type RiakNodeMember struct {
 
 	// Health is the health status of the node.
 	Health string `json:"health,omitempty"`
+
+	// Phase is the lifecycle phase of the node.
+	Phase string `json:"phase,omitempty"`
+
+	// StorageReady indicates if the node's storage is ready.
+	StorageReady bool `json:"storageReady,omitempty"`
+
+	// Conditions contains detailed conditions for this node.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// ClusterPhase is the phase of cluster lifecycle.
+type ClusterPhase string
+
+const (
+	PhaseCreating ClusterPhase = "Creating"
+	PhaseReady    ClusterPhase = "Ready"
+	PhaseUpdating ClusterPhase = "Updating"
+	PhaseFailed   ClusterPhase = "Failed"
+)
+
+// NodeCondition represents the condition of a single node.
+type NodeCondition struct {
+	// Name is the node name.
+	Name string `json:"name,omitempty"`
+
+	// Ready indicates if the node is ready.
+	Ready bool `json:"ready,omitempty"`
+
+	// Health is the health status of the node.
+	Health string `json:"health,omitempty"`
+
+	// Phase is the lifecycle phase of the node.
+	Phase string `json:"phase,omitempty"`
+
+	// PodName is the Kubernetes Pod name.
+	PodName string `json:"podName,omitempty"`
+
+	// StorageReady indicates if the node's storage is ready.
+	StorageReady bool `json:"storageReady,omitempty"`
+
+	// StorageClassName is the storage class name in use.
+	StorageClassName string `json:"storageClassName,omitempty"`
+
+	// StorageSize is the storage size configured.
+	StorageSize string `json:"storageSize,omitempty"`
+
+	// Conditions contains detailed conditions for this node.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// RiakNodeMember represents a cluster member node.
+type RiakNodeMember struct {
+	// Name is the member name.
+	Name string `json:"name,omitempty"`
+
+	// Pod is the Kubernetes Pod name.
+	Pod string `json:"pod,omitempty"`
+
+	// Ready indicates if the node is ready.
+	Ready bool `json:"ready,omitempty"`
+
+	// Health is the health status of the node.
+	Health string `json:"health,omitempty"`
+
+	// Phase is the lifecycle phase of the node.
+	Phase string `json:"phase,omitempty"`
+
+	// StorageReady indicates if the node's storage is ready.
+	StorageReady bool `json:"storageReady,omitempty"`
+
+	// Conditions contains detailed conditions for this node.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
