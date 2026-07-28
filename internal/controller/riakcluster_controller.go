@@ -759,6 +759,15 @@ func (r *RiakClusterReconciler) monitoringStatus(ctx context.Context, cluster *r
 }
 
 // bucketRefs lists the RiakBuckets targeting this cluster with their readiness.
+//
+// The spec.clusterName match is done here rather than through a field index and
+// client.MatchingFields: that only works against the manager's cached client, and
+// these helpers also run under a plain client.New client (the whole envtest suite,
+// and any caller constructing the reconciler directly), where the API server
+// rejects the selector with "field label not supported: spec.clusterName" —
+// CRDs only support metadata.name/namespace selectors unless the CRD declares
+// selectableFields. The list is already served from the cache in production, so
+// the filter is an in-memory scan either way.
 func (r *RiakClusterReconciler) bucketRefs(ctx context.Context, cluster *riakv1.RiakCluster) ([]riakv1.RiakBucketRef, error) {
 	buckets := &riakv1.RiakBucketList{}
 	if err := r.List(ctx, buckets, client.InNamespace(cluster.Namespace)); err != nil {
@@ -780,7 +789,8 @@ func (r *RiakClusterReconciler) bucketRefs(ctx context.Context, cluster *riakv1.
 	return refs, nil
 }
 
-// userRefs lists the RiakUsers targeting this cluster with their readiness.
+// userRefs lists the RiakUsers targeting this cluster with their readiness. It
+// filters in memory for the same reason as bucketRefs.
 func (r *RiakClusterReconciler) userRefs(ctx context.Context, cluster *riakv1.RiakCluster) ([]riakv1.RiakUserRef, error) {
 	users := &riakv1.RiakUserList{}
 	if err := r.List(ctx, users, client.InNamespace(cluster.Namespace)); err != nil {
