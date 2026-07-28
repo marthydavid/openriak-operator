@@ -1,0 +1,152 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitTypeAll(chore)"
+  ],
+  "timezone": "Europe/Budapest",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "constraints": {
+    "go": "1.22"
+  },
+  "packageRules": [
+    {
+      "description": "Kubernetes libraries are version-locked to controller-runtime — api, apimachinery, client-go and apiextensions-apiserver must move as a set, so keep them in one PR.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "k8s.io/**",
+        "sigs.k8s.io/controller-runtime",
+        "sigs.k8s.io/structured-merge-diff/**"
+      ],
+      "groupName": "kubernetes",
+      "addLabels": [
+        "kubernetes"
+      ]
+    },
+    {
+      "description": "The go directive in go.mod is a deliberate floor, not something to chase. CI, the builder image and golangci-lint v1.59 are all pinned to the same Go line; raising it is a manual decision.",
+      "matchDatasources": [
+        "golang-version"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Keep the builder image on the Go line the module targets. golangci-lint v1.59 cannot parse export data from a newer Go, so a silent bump here breaks the lint job.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "golang"
+      ],
+      "allowedVersions": "<1.23"
+    },
+    {
+      "description": "The Riak operand image pins per-architecture bases and full RPM URLs that were chosen by hand (some upstream aarch64 builds SIGILL on non-SVE arm64 — see CLAUDE.md). Version changes here are a curation decision, never an automatic one.",
+      "matchFileNames": [
+        "images/riak/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "ghcr.io/marthydavid/* images are this repository's own build output. Their tags are set by the release and chart-bump process, not by dependency updates.",
+      "matchPackageNames": [
+        "ghcr.io/marthydavid/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Group routine GitHub Actions bumps into a single PR; majors still get their own.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest"
+      ],
+      "groupName": "github-actions"
+    },
+    {
+      "description": "Build and test tooling moves together: it only affects CI and local development, never the shipped operator.",
+      "matchPackageNames": [
+        "github.com/onsi/ginkgo/**",
+        "github.com/onsi/gomega",
+        "sigs.k8s.io/controller-tools",
+        "sigs.k8s.io/kustomize/**"
+      ],
+      "groupName": "go tooling"
+    },
+    {
+      "description": "golangci-lint v2 renamed the configuration format, so a major bump needs .golangci.yml migrated by hand in the same PR. Keep it isolated and labelled.",
+      "matchPackageNames": [
+        "github.com/golangci/golangci-lint",
+        "golangci/golangci-lint-action"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "groupName": "golangci-lint major",
+      "addLabels": [
+        "needs-manual-migration"
+      ]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "controller-gen version pinned in the Makefile",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "CONTROLLER_TOOLS_VERSION \\?= (?<currentValue>v\\S+)"
+      ],
+      "depNameTemplate": "sigs.k8s.io/controller-tools",
+      "datasourceTemplate": "go"
+    },
+    {
+      "customType": "regex",
+      "description": "kustomize version pinned in the Makefile",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "KUSTOMIZE_VERSION \\?= (?<currentValue>v\\S+)"
+      ],
+      "depNameTemplate": "sigs.k8s.io/kustomize/kustomize/v5",
+      "datasourceTemplate": "go"
+    },
+    {
+      "customType": "regex",
+      "description": "golangci-lint version pinned in the Makefile",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "GOLANGCI_LINT_VERSION \\?= (?<currentValue>v\\S+)"
+      ],
+      "depNameTemplate": "github.com/golangci/golangci-lint",
+      "datasourceTemplate": "go"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": [
+      "security"
+    ],
+    "schedule": [
+      "at any time"
+    ]
+  }
+}
