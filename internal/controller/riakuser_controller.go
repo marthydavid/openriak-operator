@@ -205,46 +205,11 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// certificate they authenticate with actually exists yet.
 	certReady, certReason := fetchCertificateReadiness(ctx, r.Client, userCertName(user.Name), user.Namespace)
 
-	// Snapshot what status already says: while the certificate is pending this
-	// block runs every 30s, and an unchanged status must not be rewritten each
-	// time.
-	unchanged := user.Status.Phase == riakv1.UserPhaseReady &&
-		user.Status.Created &&
-		user.Status.Error == "" &&
-		user.Status.Username == user.Spec.Username &&
-		user.Status.ClusterName == cluster.Name &&
-		user.Status.CertificateReady == certReady &&
-		user.Status.CertificateError == certReason &&
-		equalGrants(user.Status.Grants, user.Spec.Grants)
-
-	user.Status.Phase = riakv1.UserPhaseReady
-	user.Status.Created = true
-	user.Status.Error = ""
-	user.Status.Username = user.Spec.Username
-	user.Status.ClusterName = cluster.Name
-	user.Status.Grants = append([]riakv1.Grant(nil), user.Spec.Grants...)
-	user.Status.CertificateReady = certReady
-	user.Status.CertificateError = certReason
-
-	var certChanged bool
-	if certReady {
-		certChanged = setCondition(&user.Status.Conditions, conditionCertificateReady, true, user.Generation,
-			"CertificateIssued", "the client certificate has been issued")
-	} else {
-		certChanged = setCondition(&user.Status.Conditions, conditionCertificateReady, false, user.Generation,
-			"CertificatePending", certReason)
-	}
-	readyChanged := setCondition(&user.Status.Conditions, conditionReady, true, user.Generation,
-		"UserProvisioned", fmt.Sprintf("Riak user %q is provisioned on cluster %s", user.Spec.Username, cluster.Name))
-
-	if !unchanged || certChanged || readyChanged {
-		user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
-		// The Riak-side identity exists now, so a failed status write is retried
-		// rather than swallowed: every call above is idempotent.
-		if err := r.Status().Update(ctx, user); err != nil {
-			log.Error(err, "failed to update user status")
-			return ctrl.Result{}, err
-		}
+	// The Riak-side identity exists now, so a failed status write is retried
+	// rather than swallowed: every call above is idempotent.
+	if err := r.markUserReady(ctx, user, cluster.Name, certReady, certReason); err != nil {
+		log.Error(err, "failed to update user status")
+		return ctrl.Result{}, err
 	}
 
 	// Requeue until the certificate is observed issued so status.certificateReady
@@ -255,6 +220,51 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// markUserReady records the provisioned Riak identity on the user's status: the
+// phase, the applied username/cluster/grants, and the certificate's readiness.
+//
+// Nothing is written when the recorded state already matches: while the
+// certificate is pending the caller re-enters this every 30s, and rewriting an
+// identical status on every poll is the churn setCondition's change result exists
+// to prevent.
+func (r *RiakUserReconciler) markUserReady(ctx context.Context, user *riakv1.RiakUser,
+	clusterName string, certReady bool, certReason string) error {
+
+	unchanged := user.Status.Phase == riakv1.UserPhaseReady &&
+		user.Status.Created &&
+		user.Status.Error == "" &&
+		user.Status.Username == user.Spec.Username &&
+		user.Status.ClusterName == clusterName &&
+		user.Status.CertificateReady == certReady &&
+		user.Status.CertificateError == certReason &&
+		equalGrants(user.Status.Grants, user.Spec.Grants)
+
+	user.Status.Phase = riakv1.UserPhaseReady
+	user.Status.Created = true
+	user.Status.Error = ""
+	user.Status.Username = user.Spec.Username
+	user.Status.ClusterName = clusterName
+	user.Status.Grants = append([]riakv1.Grant(nil), user.Spec.Grants...)
+	user.Status.CertificateReady = certReady
+	user.Status.CertificateError = certReason
+
+	condReason, condMessage := "CertificatePending", certReason
+	if certReady {
+		condReason, condMessage = "CertificateIssued", "the client certificate has been issued"
+	}
+	certChanged := setCondition(&user.Status.Conditions, conditionCertificateReady, certReady,
+		user.Generation, condReason, condMessage)
+	readyChanged := setCondition(&user.Status.Conditions, conditionReady, true, user.Generation,
+		"UserProvisioned", fmt.Sprintf("Riak user %q is provisioned on cluster %s", user.Spec.Username, clusterName))
+
+	if unchanged && !certChanged && !readyChanged {
+		return nil
+	}
+
+	user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+	return r.Status().Update(ctx, user)
 }
 
 // equalGrants reports whether two grant lists are identical, element for element.
