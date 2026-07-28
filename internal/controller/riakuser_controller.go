@@ -115,6 +115,13 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		Namespace: user.Namespace,
 		Name:      user.Spec.ClusterName,
 	}, cluster); err != nil {
+		// Only a genuinely absent cluster is the user's problem. Any other lookup
+		// failure (API server unavailable, RBAC, timeout) is returned so
+		// controller-runtime retries it with backoff, instead of reporting the
+		// cluster as missing.
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
 		log.Error(err, "failed to get cluster", "cluster", user.Spec.ClusterName)
 		r.failUser(ctx, user, "ClusterNotFound", fmt.Sprintf("cluster not found: %v", err))
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -198,6 +205,18 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// certificate they authenticate with actually exists yet.
 	certReady, certReason := fetchCertificateReadiness(ctx, r.Client, userCertName(user.Name), user.Namespace)
 
+	// Snapshot what status already says: while the certificate is pending this
+	// block runs every 30s, and an unchanged status must not be rewritten each
+	// time.
+	unchanged := user.Status.Phase == riakv1.UserPhaseReady &&
+		user.Status.Created &&
+		user.Status.Error == "" &&
+		user.Status.Username == user.Spec.Username &&
+		user.Status.ClusterName == cluster.Name &&
+		user.Status.CertificateReady == certReady &&
+		user.Status.CertificateError == certReason &&
+		equalGrants(user.Status.Grants, user.Spec.Grants)
+
 	user.Status.Phase = riakv1.UserPhaseReady
 	user.Status.Created = true
 	user.Status.Error = ""
@@ -206,20 +225,26 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	user.Status.Grants = append([]riakv1.Grant(nil), user.Spec.Grants...)
 	user.Status.CertificateReady = certReady
 	user.Status.CertificateError = certReason
-	user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
 
+	var certChanged bool
 	if certReady {
-		setCondition(&user.Status.Conditions, conditionCertificateReady, true, user.Generation,
+		certChanged = setCondition(&user.Status.Conditions, conditionCertificateReady, true, user.Generation,
 			"CertificateIssued", "the client certificate has been issued")
 	} else {
-		setCondition(&user.Status.Conditions, conditionCertificateReady, false, user.Generation,
+		certChanged = setCondition(&user.Status.Conditions, conditionCertificateReady, false, user.Generation,
 			"CertificatePending", certReason)
 	}
-	setCondition(&user.Status.Conditions, conditionReady, true, user.Generation,
+	readyChanged := setCondition(&user.Status.Conditions, conditionReady, true, user.Generation,
 		"UserProvisioned", fmt.Sprintf("Riak user %q is provisioned on cluster %s", user.Spec.Username, cluster.Name))
 
-	if err := r.Status().Update(ctx, user); err != nil {
-		log.Error(err, "failed to update user status")
+	if !unchanged || certChanged || readyChanged {
+		user.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+		// The Riak-side identity exists now, so a failed status write is retried
+		// rather than swallowed: every call above is idempotent.
+		if err := r.Status().Update(ctx, user); err != nil {
+			log.Error(err, "failed to update user status")
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Requeue until the certificate is observed issued so status.certificateReady
@@ -230,6 +255,19 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// equalGrants reports whether two grant lists are identical, element for element.
+func equalGrants(a, b []riakv1.Grant) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // failUser records a failure on the user: phase, error message and the Ready
