@@ -24,11 +24,14 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
@@ -342,9 +345,11 @@ var _ = Describe("Resource status reporting", func() {
 				Executor: riak.NewExecutorWithRunner(logr.Discard(), noopRunner),
 			}
 			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: ns}}
-			res, err := r.Reconcile(ctx, req)
+			// First reconcile adds the finalizer and initialises status; the second
+			// does the work whose result the caller inspects.
+			_, err := r.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
-			res, err = r.Reconcile(ctx, req)
+			res, err := r.Reconcile(ctx, req)
 			Expect(err).NotTo(HaveOccurred())
 			return res
 		}
@@ -457,6 +462,43 @@ var _ = Describe("Resource status reporting", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: bucketName, Namespace: ns}, observed)).To(Succeed())
 			Expect(observed.ResourceVersion).To(Equal(before))
 		})
+
+		It("returns the error when the cluster lookup fails for a reason other than NotFound", func() {
+			const bucketName = "status-bucket-lookup-error"
+			bucket := &riakv1.RiakBucket{
+				ObjectMeta: metav1.ObjectMeta{Name: bucketName, Namespace: ns},
+				Spec:       riakv1.RiakBucketSpec{ClusterName: clusterName, BucketName: "flaky"},
+			}
+			Expect(k8sClient.Create(ctx, bucket)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, bucket)
+				_ = reconcileBucket(ctx, bucketName, ns)
+			})
+
+			// A cluster lookup that fails for any reason other than "absent" is a
+			// transient problem, not a missing cluster: it must surface as a
+			// reconcile error rather than a Failed bucket.
+			wc, err := client.NewWithWatch(cfg, client.Options{Scheme: k8sClient.Scheme()})
+			Expect(err).NotTo(HaveOccurred())
+			flaky := interceptor.NewClient(wc, interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*riakv1.RiakCluster); ok {
+						return apierrors.NewServiceUnavailable("api server is down")
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+
+			r := &RiakBucketReconciler{Client: flaky, Scheme: k8sClient.Scheme()}
+			_, err = r.Reconcile(ctx, reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: bucketName, Namespace: ns},
+			})
+			Expect(err).To(HaveOccurred())
+
+			observed := &riakv1.RiakBucket{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: bucketName, Namespace: ns}, observed)).To(Succeed())
+			Expect(observed.Status.Phase).NotTo(Equal(riakv1.BucketPhaseFailed))
+		})
 	})
 
 	Context("RiakUser status", func() {
@@ -538,6 +580,13 @@ var _ = Describe("Resource status reporting", func() {
 			Expect(meta.IsStatusConditionTrue(observed.Status.Conditions, conditionReady)).To(BeTrue())
 			Expect(res.RequeueAfter).NotTo(BeZero())
 
+			By("not rewriting the status while the certificate stays pending")
+			before := observed.ResourceVersion
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userName, Namespace: ns}, observed)).To(Succeed())
+			Expect(observed.ResourceVersion).To(Equal(before))
+
 			By("reporting the certificate as ready once cert-manager issues it")
 			markCertificateReady(ctx, userCertName(userName), ns)
 			res, err = r.Reconcile(ctx, req)
@@ -617,6 +666,19 @@ var _ = Describe("Resource status reporting", func() {
 			props, nVal = effectiveBucketProperties(riakv1.RiakBucketSpec{})
 			Expect(nVal).To(BeZero())
 			Expect(props).To(BeEmpty(), "an empty spec leaves every property to Riak's defaults")
+
+			// n_val supplied only through the free-form map still reaches Riak, so
+			// status has to report it rather than claiming 0.
+			props, nVal = effectiveBucketProperties(riakv1.RiakBucketSpec{
+				Properties: map[string]string{"n_val": "7"},
+			})
+			Expect(nVal).To(Equal(int32(7)))
+			Expect(props).To(HaveKeyWithValue("n_val", "7"))
+
+			_, nVal = effectiveBucketProperties(riakv1.RiakBucketSpec{
+				Properties: map[string]string{"n_val": "not-a-number"},
+			})
+			Expect(nVal).To(BeZero(), "an unparseable n_val is left for Riak to reject")
 
 			props, _ = effectiveBucketProperties(riakv1.RiakBucketSpec{
 				Properties: map[string]string{"allow_mult": "false"},

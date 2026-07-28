@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/marthydavid/openriak-operator/internal/riak"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -91,6 +92,13 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		Namespace: bucket.Namespace,
 		Name:      bucket.Spec.ClusterName,
 	}, cluster); err != nil {
+		// Only a genuinely absent cluster is the bucket's problem. Any other lookup
+		// failure (API server unavailable, RBAC, timeout) is returned so
+		// controller-runtime retries it with backoff, instead of reporting the
+		// cluster as missing.
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
 		log.Error(err, "failed to get cluster", "cluster", bucket.Spec.ClusterName)
 		r.failBucket(ctx, bucket, "ClusterNotFound", fmt.Sprintf("cluster not found: %v", err))
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -144,8 +152,14 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	setCondition(&bucket.Status.Conditions, conditionReady, true, bucket.Generation,
 		"BucketCreated", fmt.Sprintf("bucket type %q is active on cluster %s", bucketType, cluster.Name))
 
+	// The bucket exists in Riak now, so a failed status write must be retried:
+	// returning the error requeues, and re-running the idempotent create is
+	// cheaper than leaving the recorded state behind reality. This path does not
+	// requeue on success, so it writes once per reconcile event rather than on a
+	// timer.
 	if err := r.Status().Update(ctx, bucket); err != nil {
 		log.Error(err, "failed to update bucket status")
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
@@ -174,8 +188,10 @@ func (r *RiakBucketReconciler) failBucket(ctx context.Context, bucket *riakv1.Ri
 // effectiveBucketProperties resolves the bucket-type properties the operator sends
 // to Riak. spec.properties is the base; the typed fields are layered on top, since
 // they are the validated, documented API (use spec.properties to set anything the
-// CRD does not model). It also returns the resulting n_val, or 0 when the spec
-// leaves it to Riak's own default.
+// CRD does not model). It also returns the n_val that ends up in that map — from
+// the typed fields, or from spec.properties when only that supplies one — so
+// status reports the value actually applied. It is 0 when nothing sets n_val and
+// Riak's own default applies.
 //
 // allow_mult is only written when spec.allowMulti is true: the field is a plain
 // bool, so "false" cannot be told apart from "unset", and writing it out would
@@ -193,8 +209,15 @@ func effectiveBucketProperties(spec riakv1.RiakBucketSpec) (map[string]string, i
 	if nVal == 0 {
 		nVal = spec.ReplicationFactor
 	}
-	if nVal > 0 {
+	switch {
+	case nVal > 0:
 		properties["n_val"] = strconv.Itoa(int(nVal))
+	default:
+		// No typed value, so whatever spec.properties carries is what Riak gets.
+		// Report it rather than leaving status.nVal at 0.
+		if parsed, err := strconv.Atoi(properties["n_val"]); err == nil && parsed > 0 {
+			nVal = int32(parsed)
+		}
 	}
 	if spec.AllowMulti {
 		properties["allow_mult"] = "true"
