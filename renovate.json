@@ -21,6 +21,13 @@
   },
   "packageRules": [
     {
+      "description": "Only offer module versions that build on the Go line this repo targets. constraints.go alone just picks the toolchain Renovate runs; without strict filtering it would still propose a dependency whose own go.mod requires a newer Go, which is precisely the break the pins below exist to avoid.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "constraintsFiltering": "strict"
+    },
+    {
       "description": "Kubernetes libraries are version-locked to controller-runtime — api, apimachinery, client-go and apiextensions-apiserver must move as a set, so keep them in one PR.",
       "matchManagers": [
         "gomod"
