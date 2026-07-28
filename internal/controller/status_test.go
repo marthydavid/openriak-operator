@@ -680,6 +680,15 @@ var _ = Describe("Resource status reporting", func() {
 			})
 			Expect(nVal).To(BeZero(), "an unparseable n_val is left for Riak to reject")
 
+			// An n_val past int32 must not wrap into a negative or truncated value
+			// that Riak never saw: 4294967299 would otherwise be reported as 3.
+			props, nVal = effectiveBucketProperties(riakv1.RiakBucketSpec{
+				Properties: map[string]string{"n_val": "4294967299"},
+			})
+			Expect(nVal).To(BeZero(), "an n_val too large for the status field is left unreported")
+			Expect(props).To(HaveKeyWithValue("n_val", "4294967299"),
+				"the raw value is still what gets sent to Riak")
+
 			props, _ = effectiveBucketProperties(riakv1.RiakBucketSpec{
 				Properties: map[string]string{"allow_mult": "false"},
 			})

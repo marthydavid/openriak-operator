@@ -214,8 +214,11 @@ func effectiveBucketProperties(spec riakv1.RiakBucketSpec) (map[string]string, i
 		properties["n_val"] = strconv.Itoa(int(nVal))
 	default:
 		// No typed value, so whatever spec.properties carries is what Riak gets.
-		// Report it rather than leaving status.nVal at 0.
-		if parsed, err := strconv.Atoi(properties["n_val"]); err == nil && parsed > 0 {
+		// Report it rather than leaving status.nVal at 0. Parsed at 32 bits so a
+		// value too large for the status field is left unreported instead of
+		// wrapping into a negative or truncated n_val that Riak never saw —
+		// status.properties still carries the raw string that was sent.
+		if parsed, err := strconv.ParseInt(properties["n_val"], 10, 32); err == nil && parsed > 0 {
 			nVal = int32(parsed)
 		}
 	}
