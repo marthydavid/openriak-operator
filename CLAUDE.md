@@ -12,6 +12,23 @@ Coverage target: **≥85%** on `internal/controller` and `internal/riak`.
 
 The `test/e2e` package requires a live Kubernetes cluster; expected to fail locally.
 
+### Linting locally
+
+CI runs golangci-lint v1.59.1 under Go 1.22 (`.github/workflows/lint.yml`). Run it the same way,
+or it reports nothing useful:
+
+```bash
+GOTOOLCHAIN=go1.22.12 golangci-lint run
+```
+
+Without the pinned toolchain, a newer local Go emits export data that v1.59.1 cannot parse, and
+every file drowns in bogus `typecheck` errors (`r.Get undefined`, `undefined: Expect`) that mask
+the real findings — so a "clean" run means nothing. `GOTOOLCHAIN` fetches the toolchain through
+GOPROXY, so it works where a `dl.google.com` download is blocked.
+
+Watch `gocyclo` in particular: `RiakUserReconciler.Reconcile` sits near the limit of 30, so a
+couple of added branches trip it. Extract into a helper rather than raising the threshold.
+
 ## Testability Patterns
 
 ### Executor injection
