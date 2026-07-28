@@ -158,3 +158,27 @@ Every controller follows this order in Reconcile:
 3. Add finalizer if absent
 4. Initialise status if empty
 5. Do business logic
+
+## Status Reporting
+
+`internal/controller/status.go` holds the shared status helpers. Rules the controllers follow:
+
+- **Status describes what was applied, not what was requested.** `RiakBucket.status.properties`
+  is the exact property set sent to `riak-admin`, i.e. `spec.properties` with the typed fields
+  (`nVal`/`replicationFactor` → `n_val`, `allowMulti` → `allow_mult`) layered on top by
+  `effectiveBucketProperties`. Typed fields win over the same key in `spec.properties`;
+  `allow_mult` is only written when `spec.allowMulti` is true, because a plain `false` cannot be
+  told apart from "unset".
+- **Conditions go through `setCondition`**, which wraps `meta.SetStatusCondition` so
+  LastTransitionTime survives unchanged states. It returns whether anything changed — use that to
+  skip status writes on paths that requeue every few seconds (`failBucket`, `failUser`, the
+  "cluster not ready" waits), otherwise every pending resource writes status continuously.
+- **Certificate readiness is not part of the phase.** `RiakUser.status.phase: Ready` means the
+  Riak-side identity exists; cert-manager issuance is asynchronous and is reported in
+  `certificateReady` / `certificateError` plus the `CertificateReady` condition. The user reconcile
+  requeues (30s) until the certificate is observed issued.
+- **Cluster status is recomputed from live objects on every reconcile** (10s requeue): pods for
+  node health, PVCs (`data-<pod>`) for `storageReady`, the cert-manager Certificate for
+  `tlsStatus`, pod container statuses plus the ServiceMonitor for `monitoringStatus`, and the
+  namespace's RiakBuckets/RiakUsers for `buckets`/`users`. Lists are sorted by name so the status
+  does not churn on map/list ordering.

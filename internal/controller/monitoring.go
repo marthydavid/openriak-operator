@@ -38,6 +38,10 @@ const (
 	riakMetricsPortName = "metrics"
 	riakMetricsPort     = int32(7979)
 
+	// exporterContainerName is the metrics sidecar's container name, also used to
+	// read its readiness back out of the pod status.
+	exporterContainerName = "metrics-exporter"
+
 	// defaultExporterImage translates Riak's JSON /stats into Prometheus
 	// metrics. Multi-arch (amd64+arm64) upstream image.
 	defaultExporterImage = "quay.io/prometheuscommunity/json-exporter:v0.6.0"
@@ -172,7 +176,7 @@ func exporterContainer(cluster *riakv1.RiakCluster) corev1.Container {
 		image = cluster.Spec.Monitoring.ExporterImage
 	}
 	return corev1.Container{
-		Name:  "metrics-exporter",
+		Name:  exporterContainerName,
 		Image: image,
 		Args:  []string{"--config.file=/config/config.yml"},
 		Ports: []corev1.ContainerPort{

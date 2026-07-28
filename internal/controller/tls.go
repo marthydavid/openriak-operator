@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
 )
@@ -37,6 +38,14 @@ const (
 	riakTLSKeyFile    = "/etc/riak/certs/tls.key"
 	riakTLSCACertFile = "/etc/riak/certs/ca.crt"
 )
+
+// certificateGVK identifies the cert-manager Certificate resource the operator
+// manages as an unstructured object.
+var certificateGVK = schema.GroupVersionKind{
+	Group:   certManagerGroup,
+	Version: certManagerVersion,
+	Kind:    certManagerKind,
+}
 
 // clusterTLSSecretName returns the name of the Secret cert-manager creates for cluster TLS.
 func clusterTLSSecretName(clusterName string) string {

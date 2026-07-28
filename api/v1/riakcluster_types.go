@@ -122,7 +122,8 @@ type RiakClusterStatus struct {
 	// ReadyNodes is the number of ready nodes.
 	ReadyNodes int32 `json:"readyNodes,omitempty"`
 
-	// TotalNodes is the total number of nodes in the cluster.
+	// TotalNodes is the desired number of nodes (spec.size), so readyNodes out of
+	// totalNodes reads as progress towards the spec.
 	TotalNodes int32 `json:"totalNodes,omitempty"`
 
 	// Conditions represent the latest observed conditions.
@@ -141,10 +142,12 @@ type RiakClusterStatus struct {
 	// +optional
 	SecurityEnabled bool `json:"securityEnabled,omitempty"`
 
-	// StorageClassName is the storage class name currently in use.
+	// StorageClassName is the storage class backing the node data volumes. Empty for
+	// ephemeral clusters, which use an emptyDir instead.
 	StorageClassName string `json:"storageClassName,omitempty"`
 
-	// StorageSize is the storage size currently configured.
+	// StorageSize is the size of each node's data volume, including the operator's
+	// default when spec.storageSize is unset. Empty for ephemeral clusters.
 	StorageSize string `json:"storageSize,omitempty"`
 
 	// EphemeralStorage indicates if ephemeral storage is in use.
@@ -156,10 +159,10 @@ type RiakClusterStatus struct {
 	// MonitoringStatus indicates the monitoring configuration status.
 	MonitoringStatus MonitoringStatus `json:"monitoringStatus,omitempty"`
 
-	// Buckets is a list of buckets created in this cluster.
+	// Buckets lists the RiakBuckets targeting this cluster, by resource name.
 	Buckets []RiakBucketRef `json:"buckets,omitempty"`
 
-	// Users is a list of users created in this cluster.
+	// Users lists the RiakUsers targeting this cluster, by resource name.
 	Users []RiakUserRef `json:"users,omitempty"`
 
 	// NodeConditions contains detailed conditions for each node.
@@ -171,16 +174,18 @@ type TLSStatus struct {
 	// Enabled indicates if TLS is enabled.
 	Enabled bool `json:"enabled,omitempty"`
 
-	// CertManagerReady indicates if cert-manager certificates are ready.
+	// CertManagerReady indicates if cert-manager has issued the cluster certificate.
 	CertManagerReady bool `json:"certManagerReady,omitempty"`
 
-	// CertManagerError contains error details if certificate provisioning failed.
+	// CertManagerError explains why the certificate is not ready.
 	CertManagerError string `json:"certManagerError,omitempty"`
 
-	// InterNodeReady indicates if inter-node TLS is ready.
+	// InterNodeReady indicates if inter-node TLS is ready, i.e. the certificate has
+	// been issued and every node is running with it.
 	InterNodeReady bool `json:"interNodeReady,omitempty"`
 
-	// ClientReady indicates if client TLS is ready.
+	// ClientReady indicates if client TLS is ready. Riak serves client and
+	// inter-node TLS from the same certificate, so the two become ready together.
 	ClientReady bool `json:"clientReady,omitempty"`
 }
 
@@ -189,43 +194,64 @@ type MonitoringStatus struct {
 	// Enabled indicates if monitoring is enabled.
 	Enabled bool `json:"enabled,omitempty"`
 
-	// ExporterReady indicates if the metrics exporter sidecar is ready.
+	// ExporterReady indicates if every node's metrics exporter sidecar is ready.
 	ExporterReady bool `json:"exporterReady,omitempty"`
 
-	// ServiceMonitorReady indicates if the ServiceMonitor is ready (when using Prometheus Operator).
+	// ServiceMonitorReady indicates if the ServiceMonitor exists (it is skipped on
+	// clusters without the Prometheus Operator CRDs).
 	ServiceMonitorReady bool `json:"serviceMonitorReady,omitempty"`
 
-	// ExporterError contains error details if the exporter failed to start.
+	// ExporterError names the first node whose exporter is not ready, and why.
 	ExporterError string `json:"exporterError,omitempty"`
 }
 
-// NodeCondition represents the condition of a single node.
+// RiakBucketRef references a RiakBucket belonging to a cluster.
+type RiakBucketRef struct {
+	// Name is the bucket name.
+	Name string `json:"name,omitempty"`
+
+	// Ready indicates if the bucket is ready.
+	Ready bool `json:"ready,omitempty"`
+}
+
+// RiakUserRef references a RiakUser belonging to a cluster.
+type RiakUserRef struct {
+	// Name is the user name.
+	Name string `json:"name,omitempty"`
+
+	// Ready indicates if the user is ready.
+	Ready bool `json:"ready,omitempty"`
+}
+
+// NodeCondition represents the observed condition of a single node, including the
+// storage backing it.
 type NodeCondition struct {
 	// Name is the node name.
 	Name string `json:"name,omitempty"`
 
-	// Ready indicates if the node is ready.
+	// Ready indicates if the node's pod reports the Ready condition.
 	Ready bool `json:"ready,omitempty"`
 
-	// Health is the health status of the node.
+	// Health is the health status of the node: Healthy, Unhealthy or Unknown.
 	Health string `json:"health,omitempty"`
 
-	// Phase is the lifecycle phase of the node.
+	// Phase is the phase of the node's pod, e.g. Running or Pending.
 	Phase string `json:"phase,omitempty"`
 
 	// PodName is the Kubernetes Pod name.
 	PodName string `json:"podName,omitempty"`
 
-	// StorageReady indicates if the node's storage is ready.
+	// StorageReady indicates if the node's data volume is available: its PVC is
+	// Bound, or its emptyDir exists on an ephemeral cluster.
 	StorageReady bool `json:"storageReady,omitempty"`
 
-	// StorageClassName is the storage class name in use.
+	// StorageClassName is the storage class backing the node's data volume.
 	StorageClassName string `json:"storageClassName,omitempty"`
 
-	// StorageSize is the storage size configured.
+	// StorageSize is the size of the node's data volume.
 	StorageSize string `json:"storageSize,omitempty"`
 
-	// Conditions contains detailed conditions for this node.
+	// Conditions contains the node's Ready and StorageReady conditions.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -237,19 +263,19 @@ type RiakNodeMember struct {
 	// Pod is the Kubernetes Pod name.
 	Pod string `json:"pod,omitempty"`
 
-	// Ready indicates if the node is ready.
+	// Ready indicates if the node's pod reports the Ready condition.
 	Ready bool `json:"ready,omitempty"`
 
-	// Health is the health status of the node.
+	// Health is the health status of the node: Healthy, Unhealthy or Unknown.
 	Health string `json:"health,omitempty"`
 
-	// Phase is the lifecycle phase of the node.
+	// Phase is the phase of the node's pod, e.g. Running or Pending.
 	Phase string `json:"phase,omitempty"`
 
-	// StorageReady indicates if the node's storage is ready.
+	// StorageReady indicates if the node's data volume is available.
 	StorageReady bool `json:"storageReady,omitempty"`
 
-	// Conditions contains detailed conditions for this node.
+	// Conditions contains the node's Ready and StorageReady conditions.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -263,59 +289,16 @@ const (
 	PhaseFailed   ClusterPhase = "Failed"
 )
 
-// NodeCondition represents the condition of a single node.
-type NodeCondition struct {
-	// Name is the node name.
-	Name string `json:"name,omitempty"`
-
-	// Ready indicates if the node is ready.
-	Ready bool `json:"ready,omitempty"`
-
-	// Health is the health status of the node.
-	Health string `json:"health,omitempty"`
-
-	// Phase is the lifecycle phase of the node.
-	Phase string `json:"phase,omitempty"`
-
-	// PodName is the Kubernetes Pod name.
-	PodName string `json:"podName,omitempty"`
-
-	// StorageReady indicates if the node's storage is ready.
-	StorageReady bool `json:"storageReady,omitempty"`
-
-	// StorageClassName is the storage class name in use.
-	StorageClassName string `json:"storageClassName,omitempty"`
-
-	// StorageSize is the storage size configured.
-	StorageSize string `json:"storageSize,omitempty"`
-
-	// Conditions contains detailed conditions for this node.
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
-// RiakNodeMember represents a cluster member node.
-type RiakNodeMember struct {
-	// Name is the member name.
-	Name string `json:"name,omitempty"`
-
-	// Pod is the Kubernetes Pod name.
-	Pod string `json:"pod,omitempty"`
-
-	// Ready indicates if the node is ready.
-	Ready bool `json:"ready,omitempty"`
-
-	// Health is the health status of the node.
-	Health string `json:"health,omitempty"`
-
-	// Phase is the lifecycle phase of the node.
-	Phase string `json:"phase,omitempty"`
-
-	// StorageReady indicates if the node's storage is ready.
-	StorageReady bool `json:"storageReady,omitempty"`
-
-	// Conditions contains detailed conditions for this node.
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
+// NodeHealth values reported in RiakNodeMember.Health and NodeCondition.Health.
+const (
+	// NodeHealthy means the node's pod is Running and its containers are ready.
+	NodeHealthy = "Healthy"
+	// NodeUnhealthy means the pod exists but is not serving (not ready, or in a
+	// non-Running phase such as Failed).
+	NodeUnhealthy = "Unhealthy"
+	// NodeHealthUnknown means the pod's health could not be determined yet.
+	NodeHealthUnknown = "Unknown"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status

@@ -199,6 +199,21 @@ spec:
           status:
             description: RiakClusterStatus defines the observed state of RiakCluster.
             properties:
+              buckets:
+                description: Buckets lists the RiakBuckets targeting this cluster,
+                  by resource name.
+                items:
+                  description: RiakBucketRef references a RiakBucket belonging to
+                    a cluster.
+                  properties:
+                    name:
+                      description: Name is the bucket name.
+                      type: string
+                    ready:
+                      description: Ready indicates if the bucket is ready.
+                      type: boolean
+                  type: object
+                type: array
               conditions:
                 description: Conditions represent the latest observed conditions.
                 items:
@@ -256,6 +271,10 @@ spec:
                   - type
                   type: object
                 type: array
+              ephemeralStorage:
+                description: EphemeralStorage indicates if ephemeral storage is in
+                  use.
+                type: boolean
               lastUpdateTime:
                 description: LastUpdateTime is the last time the cluster was updated.
                 format: date-time
@@ -265,18 +284,207 @@ spec:
                 items:
                   description: RiakNodeMember represents a cluster member node.
                   properties:
+                    conditions:
+                      description: Conditions contains the node's Ready and StorageReady
+                        conditions.
+                      items:
+                        description: Condition contains details for one aspect of
+                          the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False,
+                              Unknown.
+                            enum:
+                            - "True"
+                            - "False"
+                            - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                        - lastTransitionTime
+                        - message
+                        - reason
+                        - status
+                        - type
+                        type: object
+                      type: array
                     health:
-                      description: Health is the health status of the node.
+                      description: 'Health is the health status of the node: Healthy,
+                        Unhealthy or Unknown.'
                       type: string
                     name:
                       description: Name is the member name.
+                      type: string
+                    phase:
+                      description: Phase is the phase of the node's pod, e.g. Running
+                        or Pending.
                       type: string
                     pod:
                       description: Pod is the Kubernetes Pod name.
                       type: string
                     ready:
-                      description: Ready indicates if the node is ready.
+                      description: Ready indicates if the node's pod reports the Ready
+                        condition.
                       type: boolean
+                    storageReady:
+                      description: StorageReady indicates if the node's data volume
+                        is available.
+                      type: boolean
+                  type: object
+                type: array
+              monitoringStatus:
+                description: MonitoringStatus indicates the monitoring configuration
+                  status.
+                properties:
+                  enabled:
+                    description: Enabled indicates if monitoring is enabled.
+                    type: boolean
+                  exporterError:
+                    description: ExporterError names the first node whose exporter
+                      is not ready, and why.
+                    type: string
+                  exporterReady:
+                    description: ExporterReady indicates if every node's metrics exporter
+                      sidecar is ready.
+                    type: boolean
+                  serviceMonitorReady:
+                    description: |-
+                      ServiceMonitorReady indicates if the ServiceMonitor exists (it is skipped on
+                      clusters without the Prometheus Operator CRDs).
+                    type: boolean
+                type: object
+              nodeConditions:
+                description: NodeConditions contains detailed conditions for each
+                  node.
+                items:
+                  description: |-
+                    NodeCondition represents the observed condition of a single node, including the
+                    storage backing it.
+                  properties:
+                    conditions:
+                      description: Conditions contains the node's Ready and StorageReady
+                        conditions.
+                      items:
+                        description: Condition contains details for one aspect of
+                          the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False,
+                              Unknown.
+                            enum:
+                            - "True"
+                            - "False"
+                            - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                        - lastTransitionTime
+                        - message
+                        - reason
+                        - status
+                        - type
+                        type: object
+                      type: array
+                    health:
+                      description: 'Health is the health status of the node: Healthy,
+                        Unhealthy or Unknown.'
+                      type: string
+                    name:
+                      description: Name is the node name.
+                      type: string
+                    phase:
+                      description: Phase is the phase of the node's pod, e.g. Running
+                        or Pending.
+                      type: string
+                    podName:
+                      description: PodName is the Kubernetes Pod name.
+                      type: string
+                    ready:
+                      description: Ready indicates if the node's pod reports the Ready
+                        condition.
+                      type: boolean
+                    storageClassName:
+                      description: StorageClassName is the storage class backing the
+                        node's data volume.
+                      type: string
+                    storageReady:
+                      description: |-
+                        StorageReady indicates if the node's data volume is available: its PVC is
+                        Bound, or its emptyDir exists on an ephemeral cluster.
+                      type: boolean
+                    storageSize:
+                      description: StorageSize is the size of the node's data volume.
+                      type: string
                   type: object
                 type: array
               phase:
@@ -294,6 +502,61 @@ spec:
                   repeatedly running `riak-admin security enable` on a live node bounces its
                   client listeners and destabilises it under load.
                 type: boolean
+              storageClassName:
+                description: |-
+                  StorageClassName is the storage class backing the node data volumes. Empty for
+                  ephemeral clusters, which use an emptyDir instead.
+                type: string
+              storageSize:
+                description: |-
+                  StorageSize is the size of each node's data volume, including the operator's
+                  default when spec.storageSize is unset. Empty for ephemeral clusters.
+                type: string
+              tlsStatus:
+                description: TLSStatus indicates the TLS configuration status.
+                properties:
+                  certManagerError:
+                    description: CertManagerError explains why the certificate is
+                      not ready.
+                    type: string
+                  certManagerReady:
+                    description: CertManagerReady indicates if cert-manager has issued
+                      the cluster certificate.
+                    type: boolean
+                  clientReady:
+                    description: |-
+                      ClientReady indicates if client TLS is ready. Riak serves client and
+                      inter-node TLS from the same certificate, so the two become ready together.
+                    type: boolean
+                  enabled:
+                    description: Enabled indicates if TLS is enabled.
+                    type: boolean
+                  interNodeReady:
+                    description: |-
+                      InterNodeReady indicates if inter-node TLS is ready, i.e. the certificate has
+                      been issued and every node is running with it.
+                    type: boolean
+                type: object
+              totalNodes:
+                description: |-
+                  TotalNodes is the desired number of nodes (spec.size), so readyNodes out of
+                  totalNodes reads as progress towards the spec.
+                format: int32
+                type: integer
+              users:
+                description: Users lists the RiakUsers targeting this cluster, by
+                  resource name.
+                items:
+                  description: RiakUserRef references a RiakUser belonging to a cluster.
+                  properties:
+                    name:
+                      description: Name is the user name.
+                      type: string
+                    ready:
+                      description: Ready indicates if the user is ready.
+                      type: boolean
+                  type: object
+                type: array
             type: object
         type: object
     served: true
