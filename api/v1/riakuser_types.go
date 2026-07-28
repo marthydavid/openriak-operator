@@ -78,24 +78,6 @@ type Grant struct {
 	Permission string `json:"permission"`
 }
 
-// RiakBucketRef represents a bucket reference for a user.
-type RiakBucketRef struct {
-	// Name is the bucket name.
-	Name string `json:"name,omitempty"`
-
-	// Ready indicates if the bucket is ready.
-	Ready bool `json:"ready,omitempty"`
-}
-
-// RiakUserRef represents a user reference for a bucket.
-type RiakUserRef struct {
-	// Name is the user name.
-	Name string `json:"name,omitempty"`
-
-	// Ready indicates if the user is ready.
-	Ready bool `json:"ready,omitempty"`
-}
-
 // RiakUserStatus defines the observed state of RiakUser.
 type RiakUserStatus struct {
 	// Phase is the current phase (Creating, Ready, Failed).
@@ -110,19 +92,22 @@ type RiakUserStatus struct {
 	// Error contains error details if creation failed.
 	Error string `json:"error,omitempty"`
 
-	// Username is the actual username created (may differ from spec if spec was invalid).
+	// Username is the Riak username that was created.
 	Username string `json:"username,omitempty"`
 
-	// CertificateReady indicates if the mTLS client certificate is ready.
+	// CertificateReady indicates if cert-manager has issued the mTLS client
+	// certificate. It is reported separately from Phase because issuance is
+	// asynchronous: a Ready user whose certificate is still pending cannot
+	// authenticate yet.
 	CertificateReady bool `json:"certificateReady,omitempty"`
 
-	// CertificateError contains error details if certificate provisioning failed.
+	// CertificateError explains why the client certificate is not ready.
 	CertificateError string `json:"certificateError,omitempty"`
 
-	// ClusterName is the actual cluster name the user belongs to.
+	// ClusterName is the cluster the user was created on.
 	ClusterName string `json:"clusterName,omitempty"`
 
-	// Grants lists the actual grants created for this user.
+	// Grants lists the grants applied to this user in Riak.
 	Grants []Grant `json:"grants,omitempty"`
 
 	// Conditions contains detailed conditions for this user.

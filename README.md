@@ -174,9 +174,39 @@ spec:
 status:
   phase: Ready
   readyNodes: 3
+  totalNodes: 3            # desired size, so readyNodes/totalNodes reads as progress
+  storageClassName: fast   # empty when ephemeralStorage is true
+  storageSize: 10Gi
+  ephemeralStorage: false
   members:
     - name: my-cluster-0
       pod: my-cluster-0
+      ready: true
+      health: Healthy      # Healthy | Unhealthy | Unknown
+      phase: Running       # the node pod's phase
+      storageReady: true   # the node's PVC is Bound (or its emptyDir exists)
+  nodeConditions:          # per-node detail, including the storage backing it
+    - name: my-cluster-0
+      podName: my-cluster-0
+      ready: true
+      health: Healthy
+      storageReady: true
+      storageClassName: fast
+      storageSize: 10Gi
+  tlsStatus:
+    enabled: true
+    certManagerReady: true # cert-manager reports the cluster Certificate issued
+    interNodeReady: true
+    clientReady: true
+  monitoringStatus:
+    enabled: true
+    exporterReady: true    # every node's metrics sidecar is ready
+    serviceMonitorReady: true
+  buckets:                 # RiakBuckets targeting this cluster
+    - name: mydata-bucket
+      ready: true
+  users:                   # RiakUsers targeting this cluster
+    - name: appuser
       ready: true
   conditions:
     - type: Ready
@@ -212,7 +242,8 @@ spec:
   # Allow sibling values (conflicts)
   allowMulti: false
 
-  # Custom bucket properties
+  # Custom bucket properties. The typed fields above win over the same key here
+  # (set allow_mult here to force it off, since allowMulti: false means "unset").
   properties:
     "search_index": "_dont_index_"
     "consistent": "false"
@@ -221,6 +252,24 @@ status:
   phase: Ready
   created: true
   lastUpdateTime: "2024-05-18T10:30:00Z"
+  bucketName: mydata
+  bucketType: default
+  nVal: 3                  # the n_val actually applied
+  replicationFactor: 3     # same value: Riak's replication factor is n_val
+  properties:              # the full property set sent to riak-admin
+    "search_index": "_dont_index_"
+    "consistent": "false"
+    "n_val": "3"
+  nodes:                   # cluster nodes serving the bucket, as of the last reconcile
+    - name: my-cluster-0
+      pod: my-cluster-0
+      ready: true
+      health: Healthy
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: BucketCreated
+      message: bucket type "default" is active on cluster my-cluster
 ```
 
 ### RiakUser
@@ -263,10 +312,31 @@ spec:
       permission: admin
 
 status:
-  phase: Ready
+  phase: Ready             # the Riak-side identity is provisioned
   created: true
   lastUpdateTime: "2024-05-18T10:30:00Z"
+  username: appuser
+  clusterName: my-cluster
+  certificateReady: true   # cert-manager has issued the client certificate
+  # certificateError: ...  # why it has not been issued yet, when it has not
+  grants:                  # the grants applied to Riak
+    - resource: any
+      permission: read
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: UserProvisioned
+      message: Riak user "appuser" is provisioned on cluster my-cluster
+    - type: CertificateReady
+      status: "True"
+      reason: CertificateIssued
+      message: the client certificate has been issued
 ```
+
+`phase: Ready` covers the Riak-side identity (user, security source, grants). Certificate issuance
+is cert-manager's job and completes asynchronously, so it is reported separately in
+`certificateReady` / `certificateError` and the `CertificateReady` condition; the operator re-checks
+until the certificate is issued.
 
 #### Certificate-based (mTLS) authentication
 

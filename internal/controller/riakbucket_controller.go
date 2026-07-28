@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/marthydavid/openriak-operator/internal/riak"
@@ -91,17 +92,21 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		Name:      bucket.Spec.ClusterName,
 	}, cluster); err != nil {
 		log.Error(err, "failed to get cluster", "cluster", bucket.Spec.ClusterName)
-		bucket.Status.Phase = riakv1.BucketPhaseFailed
-		bucket.Status.Error = fmt.Sprintf("cluster not found: %v", err)
-		if updateErr := r.Status().Update(ctx, bucket); updateErr != nil {
-			log.Error(updateErr, "failed to update bucket status")
-		}
+		r.failBucket(ctx, bucket, "ClusterNotFound", fmt.Sprintf("cluster not found: %v", err))
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
 	// Wait for cluster to be ready
 	if cluster.Status.Phase != riakv1.PhaseReady {
 		log.V(2).Info("cluster not ready yet", "cluster", cluster.Name, "phase", cluster.Status.Phase)
+		// Written only when the condition actually changes: this path requeues
+		// every few seconds until the cluster comes up.
+		if setCondition(&bucket.Status.Conditions, conditionReady, false, bucket.Generation,
+			"ClusterNotReady", fmt.Sprintf("cluster %s is in phase %q", cluster.Name, cluster.Status.Phase)) {
+			if err := r.Status().Update(ctx, bucket); err != nil {
+				log.Error(err, "failed to update bucket status")
+			}
+		}
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
@@ -117,27 +122,100 @@ func (r *RiakBucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		bucketType = "default"
 	}
 
-	if err := manager.CreateBucketType(ctx, cluster, bucketType, bucket.Spec.Properties); err != nil {
+	properties, nVal := effectiveBucketProperties(bucket.Spec)
+
+	if err := manager.CreateBucketType(ctx, cluster, bucketType, properties); err != nil {
 		log.Error(err, "failed to create bucket", "bucket", bucket.Spec.BucketName)
-		bucket.Status.Phase = riakv1.BucketPhaseFailed
-		bucket.Status.Error = fmt.Sprintf("failed to create bucket: %v", err)
-		bucket.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
-		if updateErr := r.Status().Update(ctx, bucket); updateErr != nil {
-			log.Error(updateErr, "failed to update bucket status")
-		}
+		r.failBucket(ctx, bucket, "CreateFailed", fmt.Sprintf("failed to create bucket: %v", err))
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	// Record what was actually applied to Riak, not merely what was requested.
 	bucket.Status.Phase = riakv1.BucketPhaseReady
 	bucket.Status.Created = true
 	bucket.Status.Error = ""
+	bucket.Status.BucketName = bucket.Spec.BucketName
+	bucket.Status.BucketType = bucketType
+	bucket.Status.NVal = nVal
+	bucket.Status.ReplicationFactor = nVal
+	bucket.Status.Properties = properties
+	bucket.Status.Nodes = bucketNodes(cluster)
 	bucket.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+	setCondition(&bucket.Status.Conditions, conditionReady, true, bucket.Generation,
+		"BucketCreated", fmt.Sprintf("bucket type %q is active on cluster %s", bucketType, cluster.Name))
 
 	if err := r.Status().Update(ctx, bucket); err != nil {
 		log.Error(err, "failed to update bucket status")
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// failBucket records a failure on the bucket: phase, error message and the Ready
+// condition, written in one status update. Repeating the same failure across
+// requeues writes nothing, so a bucket blocked on e.g. a missing cluster does not
+// generate a status update every few seconds.
+func (r *RiakBucketReconciler) failBucket(ctx context.Context, bucket *riakv1.RiakBucket, reason, message string) {
+	same := bucket.Status.Phase == riakv1.BucketPhaseFailed && bucket.Status.Error == message
+
+	bucket.Status.Phase = riakv1.BucketPhaseFailed
+	bucket.Status.Error = message
+	changed := setCondition(&bucket.Status.Conditions, conditionReady, false, bucket.Generation, reason, message)
+	if same && !changed {
+		return
+	}
+	bucket.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
+
+	if err := r.Status().Update(ctx, bucket); err != nil {
+		log.FromContext(ctx).Error(err, "failed to update bucket status")
+	}
+}
+
+// effectiveBucketProperties resolves the bucket-type properties the operator sends
+// to Riak. spec.properties is the base; the typed fields are layered on top, since
+// they are the validated, documented API (use spec.properties to set anything the
+// CRD does not model). It also returns the resulting n_val, or 0 when the spec
+// leaves it to Riak's own default.
+//
+// allow_mult is only written when spec.allowMulti is true: the field is a plain
+// bool, so "false" cannot be told apart from "unset", and writing it out would
+// silently override a bucket type's own default. Set properties["allow_mult"] to
+// force it off.
+func effectiveBucketProperties(spec riakv1.RiakBucketSpec) (map[string]string, int32) {
+	properties := make(map[string]string, len(spec.Properties)+2)
+	for k, v := range spec.Properties {
+		properties[k] = v
+	}
+
+	// Riak's replication factor is n_val; replicationFactor is the spelling used
+	// when nVal is not given.
+	nVal := spec.NVal
+	if nVal == 0 {
+		nVal = spec.ReplicationFactor
+	}
+	if nVal > 0 {
+		properties["n_val"] = strconv.Itoa(int(nVal))
+	}
+	if spec.AllowMulti {
+		properties["allow_mult"] = "true"
+	}
+
+	return properties, nVal
+}
+
+// bucketNodes maps the cluster's members to the nodes serving this bucket. Bucket
+// types are cluster-wide in Riak, so every member serves it.
+func bucketNodes(cluster *riakv1.RiakCluster) []riakv1.BucketNodeRef {
+	nodes := make([]riakv1.BucketNodeRef, 0, len(cluster.Status.Members))
+	for _, m := range cluster.Status.Members {
+		nodes = append(nodes, riakv1.BucketNodeRef{
+			Name:   m.Name,
+			Pod:    m.Pod,
+			Ready:  m.Ready,
+			Health: m.Health,
+		})
+	}
+	return nodes
 }
 
 // SetupWithManager sets up the controller with the Manager. maxConcurrent sets

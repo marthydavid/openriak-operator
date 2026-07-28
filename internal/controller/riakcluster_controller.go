@@ -26,7 +26,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -46,6 +45,10 @@ import (
 const (
 	riakClusterFinalizerName = "riak.openriak.io/cluster-finalizer"
 	defaultRiakImage         = "ghcr.io/marthydavid/riak:3.2.6"
+
+	// defaultStorageSize backs each node's data volume when spec.storageSize is
+	// unset.
+	defaultStorageSize = "10Gi"
 )
 
 // RiakClusterReconciler reconciles a RiakCluster object
@@ -58,10 +61,13 @@ type RiakClusterReconciler struct {
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=riak.openriak.io,resources=riakbuckets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=riak.openriak.io,resources=riakusers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
@@ -196,7 +202,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 		pullPolicy = corev1.PullIfNotPresent
 	}
 
-	storageSize := resource.MustParse("10Gi")
+	storageSize := resource.MustParse(defaultStorageSize)
 	if cluster.Spec.StorageSize != nil {
 		storageSize = *cluster.Spec.StorageSize
 	}
@@ -565,52 +571,235 @@ func (r *RiakClusterReconciler) updateClusterStatus(ctx context.Context, cluster
 		return err
 	}
 
-	readyCount := int32(0)
-	members := []riakv1.RiakNodeMember{}
+	// Pods come back in arbitrary order; sort by name so members and
+	// nodeConditions are stable across reconciles instead of shuffling on every
+	// status write.
+	sort.Slice(pods.Items, func(i, j int) bool { return pods.Items[i].Name < pods.Items[j].Name })
 
-	for _, pod := range pods.Items {
-		member := riakv1.RiakNodeMember{
-			Pod:  pod.Name,
-			Name: pod.Name,
-		}
+	storageClassName, storageSize := clusterStorage(cluster)
 
-		for _, cond := range pod.Status.Conditions {
-			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
-				readyCount++
-				member.Ready = true
-				break
-			}
-		}
-
-		members = append(members, member)
+	// Reuse the previous per-node conditions so LastTransitionTime survives when a
+	// node's state has not actually changed.
+	previousConditions := make(map[string][]metav1.Condition, len(cluster.Status.NodeConditions))
+	for _, nc := range cluster.Status.NodeConditions {
+		previousConditions[nc.Name] = nc.Conditions
 	}
 
-	cluster.Status.ReadyNodes = readyCount
-	cluster.Status.Members = members
+	readyCount := int32(0)
+	members := make([]riakv1.RiakNodeMember, 0, len(pods.Items))
+	nodeConditions := make([]riakv1.NodeCondition, 0, len(pods.Items))
 
-	if readyCount == cluster.Spec.Size {
-		cluster.Status.Phase = riakv1.PhaseReady
-		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionTrue,
-			ObservedGeneration: cluster.Generation,
-			Reason:             "ClusterReady",
-			Message:            "Riak cluster is ready",
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+
+		ready := podIsReady(pod)
+		if ready {
+			readyCount++
+		}
+		health := podHealth(pod, ready)
+		storageReady := r.nodeStorageReady(ctx, cluster, pod)
+
+		conds := append([]metav1.Condition(nil), previousConditions[pod.Name]...)
+		if ready {
+			setCondition(&conds, conditionReady, true, cluster.Generation, "PodReady", "Riak node is ready")
+		} else {
+			setCondition(&conds, conditionReady, false, cluster.Generation, "PodNotReady",
+				fmt.Sprintf("pod %s is in phase %s and not ready", pod.Name, pod.Status.Phase))
+		}
+		if storageReady {
+			setCondition(&conds, conditionStorageReady, true, cluster.Generation, "StorageBound",
+				"the node's data volume is available")
+		} else {
+			setCondition(&conds, conditionStorageReady, false, cluster.Generation, "StorageUnavailable",
+				"the node's data volume is not available yet")
+		}
+
+		members = append(members, riakv1.RiakNodeMember{
+			Name:         pod.Name,
+			Pod:          pod.Name,
+			Ready:        ready,
+			Health:       health,
+			Phase:        string(pod.Status.Phase),
+			StorageReady: storageReady,
+			Conditions:   conds,
 		})
+		nodeConditions = append(nodeConditions, riakv1.NodeCondition{
+			Name:             pod.Name,
+			PodName:          pod.Name,
+			Ready:            ready,
+			Health:           health,
+			Phase:            string(pod.Status.Phase),
+			StorageReady:     storageReady,
+			StorageClassName: storageClassName,
+			StorageSize:      storageSize,
+			Conditions:       conds,
+		})
+	}
+
+	buckets, err := r.bucketRefs(ctx, cluster)
+	if err != nil {
+		return err
+	}
+	users, err := r.userRefs(ctx, cluster)
+	if err != nil {
+		return err
+	}
+
+	allReady := readyCount == cluster.Spec.Size
+
+	cluster.Status.ReadyNodes = readyCount
+	// TotalNodes is the desired size, so readyNodes/totalNodes reads as progress
+	// towards the spec rather than towards however many pods currently exist.
+	cluster.Status.TotalNodes = cluster.Spec.Size
+	cluster.Status.Members = members
+	cluster.Status.NodeConditions = nodeConditions
+	cluster.Status.StorageClassName = storageClassName
+	cluster.Status.StorageSize = storageSize
+	cluster.Status.EphemeralStorage = cluster.Spec.EphemeralStorage
+	cluster.Status.TLSStatus = r.tlsStatus(ctx, cluster, allReady)
+	cluster.Status.MonitoringStatus = r.monitoringStatus(ctx, cluster, pods.Items)
+	cluster.Status.Buckets = buckets
+	cluster.Status.Users = users
+
+	if allReady {
+		cluster.Status.Phase = riakv1.PhaseReady
+		setCondition(&cluster.Status.Conditions, conditionReady, true, cluster.Generation,
+			"ClusterReady", "Riak cluster is ready")
 	} else {
 		cluster.Status.Phase = riakv1.PhaseCreating
-		meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionFalse,
-			ObservedGeneration: cluster.Generation,
-			Reason:             "AwaitingPods",
-			Message:            fmt.Sprintf("Waiting for %d pods", cluster.Spec.Size-readyCount),
-		})
+		setCondition(&cluster.Status.Conditions, conditionReady, false, cluster.Generation,
+			"AwaitingPods", fmt.Sprintf("Waiting for %d pods", cluster.Spec.Size-readyCount))
 	}
 
 	cluster.Status.LastUpdateTime = &metav1.Time{Time: time.Now()}
 
 	return r.Status().Update(ctx, cluster)
+}
+
+// clusterStorage reports the storage class and size backing the cluster's data
+// volumes, mirroring what reconcileStatefulSet provisions. Ephemeral clusters use
+// an emptyDir, so neither applies and both are reported empty.
+func clusterStorage(cluster *riakv1.RiakCluster) (className, size string) {
+	if cluster.Spec.EphemeralStorage {
+		return "", ""
+	}
+	size = defaultStorageSize
+	if cluster.Spec.StorageSize != nil {
+		size = cluster.Spec.StorageSize.String()
+	}
+	return cluster.Spec.StorageClassName, size
+}
+
+// nodeStorageReady reports whether a node's data volume is usable. Ephemeral nodes
+// carry an emptyDir that exists as soon as the pod runs; durable nodes depend on
+// the StatefulSet's "data" PVC being Bound.
+func (r *RiakClusterReconciler) nodeStorageReady(ctx context.Context, cluster *riakv1.RiakCluster, pod *corev1.Pod) bool {
+	if cluster.Spec.EphemeralStorage {
+		return pod.Status.Phase == corev1.PodRunning
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	key := client.ObjectKey{Namespace: pod.Namespace, Name: "data-" + pod.Name}
+	if err := r.Get(ctx, key, pvc); err != nil {
+		return false
+	}
+	return pvc.Status.Phase == corev1.ClaimBound
+}
+
+// tlsStatus reports the observed state of the cluster's TLS configuration. Riak
+// serves inter-node and client TLS from the same certificate, so both become ready
+// together: once cert-manager has issued the certificate and every node is running
+// with it mounted.
+func (r *RiakClusterReconciler) tlsStatus(ctx context.Context, cluster *riakv1.RiakCluster, allNodesReady bool) riakv1.TLSStatus {
+	if cluster.Spec.TLS == nil || !cluster.Spec.TLS.Enabled {
+		return riakv1.TLSStatus{}
+	}
+
+	status := riakv1.TLSStatus{Enabled: true}
+	ready, reason := fetchCertificateReadiness(ctx, r.Client, clusterCertName(cluster.Name), cluster.Namespace)
+	status.CertManagerReady = ready
+	status.CertManagerError = reason
+	status.InterNodeReady = ready && allNodesReady
+	status.ClientReady = status.InterNodeReady
+	return status
+}
+
+// monitoringStatus reports the observed state of the metrics exporter sidecar and
+// its ServiceMonitor.
+func (r *RiakClusterReconciler) monitoringStatus(ctx context.Context, cluster *riakv1.RiakCluster, pods []corev1.Pod) riakv1.MonitoringStatus {
+	if !monitoringEnabled(cluster) {
+		return riakv1.MonitoringStatus{}
+	}
+
+	status := riakv1.MonitoringStatus{Enabled: true}
+
+	// The exporter counts as ready only when every node exposes metrics; a single
+	// pod without a working sidecar leaves the cluster's metrics incomplete.
+	status.ExporterReady = len(pods) > 0
+	for i := range pods {
+		ready, reason := containerReady(&pods[i], exporterContainerName)
+		if !ready {
+			status.ExporterReady = false
+			status.ExporterError = fmt.Sprintf("pod %s: %s", pods[i].Name, reason)
+			break
+		}
+	}
+	if len(pods) == 0 {
+		status.ExporterError = "no Riak pods exist yet"
+	}
+
+	sm := &unstructured.Unstructured{}
+	sm.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
+	})
+	key := client.ObjectKey{Name: cluster.Name + "-metrics", Namespace: cluster.Namespace}
+	status.ServiceMonitorReady = r.Get(ctx, key, sm) == nil
+
+	return status
+}
+
+// bucketRefs lists the RiakBuckets targeting this cluster with their readiness.
+func (r *RiakClusterReconciler) bucketRefs(ctx context.Context, cluster *riakv1.RiakCluster) ([]riakv1.RiakBucketRef, error) {
+	buckets := &riakv1.RiakBucketList{}
+	if err := r.List(ctx, buckets, client.InNamespace(cluster.Namespace)); err != nil {
+		return nil, err
+	}
+
+	refs := []riakv1.RiakBucketRef{}
+	for i := range buckets.Items {
+		b := &buckets.Items[i]
+		if b.Spec.ClusterName != cluster.Name {
+			continue
+		}
+		refs = append(refs, riakv1.RiakBucketRef{
+			Name:  b.Name,
+			Ready: b.Status.Phase == riakv1.BucketPhaseReady,
+		})
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+	return refs, nil
+}
+
+// userRefs lists the RiakUsers targeting this cluster with their readiness.
+func (r *RiakClusterReconciler) userRefs(ctx context.Context, cluster *riakv1.RiakCluster) ([]riakv1.RiakUserRef, error) {
+	users := &riakv1.RiakUserList{}
+	if err := r.List(ctx, users, client.InNamespace(cluster.Namespace)); err != nil {
+		return nil, err
+	}
+
+	refs := []riakv1.RiakUserRef{}
+	for i := range users.Items {
+		u := &users.Items[i]
+		if u.Spec.ClusterName != cluster.Name {
+			continue
+		}
+		refs = append(refs, riakv1.RiakUserRef{
+			Name:  u.Name,
+			Ready: u.Status.Phase == riakv1.UserPhaseReady,
+		})
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
+	return refs, nil
 }
 
 func (r *RiakClusterReconciler) handleDeletion(ctx context.Context, cluster *riakv1.RiakCluster) (ctrl.Result, error) {

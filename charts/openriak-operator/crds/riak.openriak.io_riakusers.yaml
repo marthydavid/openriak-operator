@@ -117,18 +117,120 @@ spec:
           status:
             description: RiakUserStatus defines the observed state of RiakUser.
             properties:
+              certificateError:
+                description: CertificateError explains why the client certificate
+                  is not ready.
+                type: string
+              certificateReady:
+                description: |-
+                  CertificateReady indicates if cert-manager has issued the mTLS client
+                  certificate. It is reported separately from Phase because issuance is
+                  asynchronous: a Ready user whose certificate is still pending cannot
+                  authenticate yet.
+                type: boolean
+              clusterName:
+                description: ClusterName is the cluster the user was created on.
+                type: string
+              conditions:
+                description: Conditions contains detailed conditions for this user.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
               created:
                 description: Created indicates if the user was successfully created.
                 type: boolean
               error:
                 description: Error contains error details if creation failed.
                 type: string
+              grants:
+                description: Grants lists the grants applied to this user in Riak.
+                items:
+                  description: Grant represents a permission grant for a user.
+                  properties:
+                    bucketName:
+                      description: BucketName is the bucket name (if resource is "bucket").
+                      type: string
+                    permission:
+                      description: Permission is the permission type.
+                      enum:
+                      - read
+                      - write
+                      - delete
+                      - list
+                      - admin
+                      type: string
+                    resource:
+                      description: Resource is what is being granted (bucket, any).
+                      enum:
+                      - bucket
+                      - any
+                      type: string
+                  required:
+                  - permission
+                  - resource
+                  type: object
+                type: array
               lastUpdateTime:
                 description: LastUpdateTime is when the user was last updated.
                 format: date-time
                 type: string
               phase:
                 description: Phase is the current phase (Creating, Ready, Failed).
+                type: string
+              username:
+                description: Username is the Riak username that was created.
                 type: string
             type: object
         type: object

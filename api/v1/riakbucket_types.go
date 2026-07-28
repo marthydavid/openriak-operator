@@ -49,7 +49,7 @@ type RiakBucketSpec struct {
 	Properties map[string]string `json:"properties,omitempty"`
 }
 
-// BucketNodeRef represents a node that has this bucket.
+// BucketNodeRef represents a node that serves this bucket.
 type BucketNodeRef struct {
 	// Name is the node name.
 	Name string `json:"name,omitempty"`
@@ -62,57 +62,6 @@ type BucketNodeRef struct {
 
 	// Health is the health status of the node.
 	Health string `json:"health,omitempty"`
-}
-
-// TLSStatus indicates the TLS configuration status.
-type TLSStatus struct {
-	// Enabled indicates if TLS is enabled.
-	Enabled bool `json:"enabled,omitempty"`
-
-	// CertManagerReady indicates if cert-manager certificates are ready.
-	CertManagerReady bool `json:"certManagerReady,omitempty"`
-
-	// CertManagerError contains error details if certificate provisioning failed.
-	CertManagerError string `json:"certManagerError,omitempty"`
-
-	// InterNodeReady indicates if inter-node TLS is ready.
-	InterNodeReady bool `json:"interNodeReady,omitempty"`
-
-	// ClientReady indicates if client TLS is ready.
-	ClientReady bool `json:"clientReady,omitempty"`
-}
-
-// MonitoringStatus indicates the monitoring configuration status.
-type MonitoringStatus struct {
-	// Enabled indicates if monitoring is enabled.
-	Enabled bool `json:"enabled,omitempty"`
-
-	// ExporterReady indicates if the metrics exporter sidecar is ready.
-	ExporterReady bool `json:"exporterReady,omitempty"`
-
-	// ServiceMonitorReady indicates if the ServiceMonitor is ready (when using Prometheus Operator).
-	ServiceMonitorReady bool `json:"serviceMonitorReady,omitempty"`
-
-	// ExporterError contains error details if the exporter failed to start.
-	ExporterError string `json:"exporterError,omitempty"`
-}
-
-// RiakBucketRef represents a bucket reference for a user.
-type RiakBucketRef struct {
-	// Name is the bucket name.
-	Name string `json:"name,omitempty"`
-
-	// Ready indicates if the bucket is ready.
-	Ready bool `json:"ready,omitempty"`
-}
-
-// RiakUserRef represents a user reference for a bucket.
-type RiakUserRef struct {
-	// Name is the user name.
-	Name string `json:"name,omitempty"`
-
-	// Ready indicates if the user is ready.
-	Ready bool `json:"ready,omitempty"`
 }
 
 // RiakBucketStatus defines the observed state of RiakBucket.
@@ -129,41 +78,33 @@ type RiakBucketStatus struct {
 	// Error contains error details if creation failed.
 	Error string `json:"error,omitempty"`
 
-	// BucketName is the actual bucket name created (may differ from spec if spec was invalid).
+	// BucketName is the bucket name that was created.
 	BucketName string `json:"bucketName,omitempty"`
 
-	// BucketType is the actual bucket type created.
+	// BucketType is the bucket type that was created, with the "default" fallback
+	// applied when spec.bucketType is empty.
 	BucketType string `json:"bucketType,omitempty"`
 
-	// ReplicationFactor is the actual replication factor created.
+	// ReplicationFactor is the replication factor applied to the bucket type. Riak's
+	// replication factor is n_val, so this matches NVal; both are empty when the spec
+	// leaves it to Riak's own default.
 	ReplicationFactor int32 `json:"replicationFactor,omitempty"`
 
-	// NVal is the actual n_val created.
+	// NVal is the n_val applied to the bucket type, resolved from spec.nVal or
+	// spec.replicationFactor. Empty when the spec leaves it to Riak's default.
 	NVal int32 `json:"nVal,omitempty"`
 
-	// Properties contains the actual bucket properties created.
+	// Properties contains the full property set sent to riak-admin, i.e.
+	// spec.properties with the typed spec fields layered on top.
 	Properties map[string]string `json:"properties,omitempty"`
 
-	// Nodes lists the nodes that have this bucket.
+	// Nodes lists the cluster nodes serving this bucket as observed at the last
+	// reconcile. Bucket types are cluster-wide, so this is the cluster's membership;
+	// RiakCluster.status carries the live view.
 	Nodes []BucketNodeRef `json:"nodes,omitempty"`
 
 	// Conditions contains detailed conditions for this bucket.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
-// BucketNodeRef represents a node that has this bucket.
-type BucketNodeRef struct {
-	// Name is the node name.
-	Name string `json:"name,omitempty"`
-
-	// Pod is the Kubernetes Pod name.
-	Pod string `json:"pod,omitempty"`
-
-	// Ready indicates if the node is ready.
-	Ready bool `json:"ready,omitempty"`
-
-	// Health is the health status of the node.
-	Health string `json:"health,omitempty"`
 }
 
 // BucketPhase is the phase of bucket lifecycle.
