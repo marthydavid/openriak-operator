@@ -127,13 +127,16 @@ RIAK_PID=$!
 trap 'echo "Termination signal received, stopping Riak..."; /usr/sbin/riak stop 2>/dev/null || kill "${RIAK_PID}" 2>/dev/null || true' TERM INT
 
 # ---------------------------------------------------------------------------
-# Wait for Riak to fully start. 'riak ping' returns 'pong' once the Erlang VM
-# is up and the node is accepting requests.
+# Wait for Riak to fully start. 'riak ping' is NOT used: in this image it never
+# reports pong even though the node is healthy (riak-admin RPC works), so gating
+# on it made the entrypoint exit 1 after RIAK_START_TIMEOUT and crash-loop every
+# pod. 'riak-admin status' reaches the node over the same RPC path the operator
+# uses and prints its stats once riak_kv is serving.
 # ---------------------------------------------------------------------------
 echo "Waiting for Riak to be ready..."
 RIAK_START_TIMEOUT="${RIAK_START_TIMEOUT:-120}"
 ELAPSED=0
-until /usr/sbin/riak ping 2>/dev/null | grep -q pong; do
+until /usr/sbin/riak-admin status 2>/dev/null | grep -q 'stats for'; do
     if ! kill -0 "${RIAK_PID}" 2>/dev/null; then
         echo "ERROR: Riak exited during startup" >&2
         cat /var/log/riak/console.log >&2
@@ -147,7 +150,7 @@ until /usr/sbin/riak ping 2>/dev/null | grep -q pong; do
     sleep 2
     ELAPSED=$((ELAPSED + 2))
 done
-echo "Riak is ready (ping=pong)."
+echo "Riak is ready (riak-admin status)."
 
 # ---------------------------------------------------------------------------
 # Forward the console log to stdout so Kubernetes captures it via kubectl logs.
