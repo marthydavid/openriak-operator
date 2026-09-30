@@ -97,11 +97,20 @@ func TestExecuteRiakAdmin_buildsCorrectArgs(t *testing.T) {
 	if c.name != "kubectl" {
 		t.Errorf("expected kubectl, got %q", c.name)
 	}
-	wantArgs := []string{"exec", "-n", "mynamespace", "mypod", "-c", "riak", "--", "riak-admin", "status"}
-	for i, a := range wantArgs {
+	wantPrefix := []string{"exec", "-n", "mynamespace", "mypod", "-c", "riak", "--", "sh", "-c"}
+	for i, a := range wantPrefix {
 		if i >= len(c.args) || c.args[i] != a {
-			t.Errorf("arg[%d]: want %q, got %q", i, a, c.args[i])
+			t.Fatalf("arg[%d]: want %q, got %v", i, a, c.args)
 		}
+	}
+	// The script must point riak-admin at the generated vm.args, and the real
+	// riak-admin arguments follow it as positional parameters ($0 = riak-admin).
+	script := c.args[len(wantPrefix)]
+	if !strings.Contains(script, "VMARGS_PATH=") || !strings.Contains(script, "exec riak-admin") {
+		t.Errorf("unexpected wrapper script: %q", script)
+	}
+	if got := c.args[len(wantPrefix)+1:]; len(got) != 2 || got[0] != "riak-admin" || got[1] != "status" {
+		t.Errorf("want trailing args [riak-admin status], got %v", got)
 	}
 }
 
