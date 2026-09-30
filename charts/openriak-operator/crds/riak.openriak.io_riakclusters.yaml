@@ -14,7 +14,23 @@ spec:
     singular: riakcluster
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .status.readyNodes
+      name: Nodes
+      type: string
+    - jsonPath: .status.totalNodes
+      name: Total
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
         description: RiakCluster is the Schema for the riakclusters API.

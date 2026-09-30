@@ -125,6 +125,11 @@ const (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Cert",type=boolean,JSONPath=`.status.certificateReady`
+// +kubebuilder:printcolumn:name="Cluster",type=string,JSONPath=`.status.clusterName`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // RiakUser is the Schema for the riakusers API.
 type RiakUser struct {
