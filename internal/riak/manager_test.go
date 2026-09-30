@@ -3,6 +3,7 @@ package riak
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -232,147 +233,198 @@ func TestConfigureNode_setsEachKey(t *testing.T) {
 	}
 }
 
-// ---------- InitializeCluster ----------
+// ---------- ReconcileMembership ----------
 
-func TestInitializeCluster_noPods(t *testing.T) {
-	runner, _ := mockRunner(nil, nil)
-	exec := newTestExecutor(runner)
+const (
+	seedNode = "riak@riak-0.riak-headless.default.svc.cluster.local"
+	soloFmt  = "================================= Membership ==================================\n" +
+		"Status     Ring    Pending    Node\n" +
+		"-------------------------------------------------------------------------------\n" +
+		"valid     100.0%%      --      %s\n" +
+		"-------------------------------------------------------------------------------\n" +
+		"Valid:1 / Leaving:0 / Exiting:0 / Joining:0 / Down:0\n"
+)
 
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	client := fake.NewClientBuilder().WithScheme(scheme).Build()
-	m := NewManager(exec, client, logr.Discard())
-
-	cluster := &riakv1.RiakCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "riak", Namespace: "default"},
+func memberTable(nodes ...string) string {
+	out := "Status     Ring    Pending    Node\n---------------\n"
+	for _, n := range nodes {
+		out += "valid      33.3%      --      " + n + "\n"
 	}
-	err := m.InitializeCluster(context.Background(), cluster)
-	if err == nil || !strings.Contains(err.Error(), "no cluster pods") {
-		t.Fatalf("expected 'no cluster pods' error, got: %v", err)
-	}
+	return out
 }
 
-func TestInitializeCluster_singlePod(t *testing.T) {
-	runner, calls := mockRunner(map[string]string{"cluster": ""}, nil)
-	exec := newTestExecutor(runner)
+func newMembershipManager(runner func(context.Context, string, ...string) (string, error)) *Manager {
+	return NewManager(newTestExecutor(runner), nil, logr.Discard())
+}
 
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
+func membershipCluster() *riakv1.RiakCluster {
+	return &riakv1.RiakCluster{ObjectMeta: metav1.ObjectMeta{Name: "riak", Namespace: "default"}}
+}
 
-	pod := corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "riak-0",
-			Namespace: "default",
-		},
+func nodeOf(pod string) string {
+	return "riak@" + pod + ".riak-headless.default.svc.cluster.local"
+}
+
+func TestReconcileMembership_joinsStandaloneNodes(t *testing.T) {
+	var cmds []string
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		cmds = append(cmds, joined)
+		if strings.HasSuffix(joined, "member-status") {
+			// every pod is its own ring
+			for _, p := range []string{"riak-0", "riak-1", "riak-2"} {
+				if strings.Contains(joined, " "+p+" ") {
+					return memberTable(nodeOf(p)), nil
+				}
+			}
+		}
+		return "", nil
 	}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&pod).Build()
-	m := NewManager(exec, client, logr.Discard())
-
-	cluster := &riakv1.RiakCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "riak", Namespace: "default"},
-	}
-	// Single pod: no joins needed, but plan+commit should be called.
-	err := m.InitializeCluster(context.Background(), cluster)
+	formed, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1", "riak-2"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	var sawPlan, sawCommit bool
-	for _, c := range *calls {
-		joined := strings.Join(c.args, " ")
-		if strings.Contains(joined, "cluster plan") {
-			sawPlan = true
-		}
-		if strings.Contains(joined, "cluster commit") {
-			sawCommit = true
+	if formed {
+		t.Error("cluster must not be reported formed in the same pass that staged joins")
+	}
+	var joins, plan, commit int
+	for _, c := range cmds {
+		switch {
+		case strings.Contains(c, "cluster join "+seedNode):
+			joins++
+			if !strings.Contains(c, " riak-1 ") && !strings.Contains(c, " riak-2 ") {
+				t.Errorf("join must run on the joining node, ran: %s", c)
+			}
+		case strings.HasSuffix(c, "cluster plan"):
+			plan++
+		case strings.HasSuffix(c, "cluster commit"):
+			commit++
 		}
 	}
-	if !sawPlan {
-		t.Error("expected cluster plan call")
-	}
-	if !sawCommit {
-		t.Error("expected cluster commit call")
+	if joins != 2 || plan != 1 || commit != 1 {
+		t.Errorf("want 2 joins, 1 plan, 1 commit; got %d/%d/%d\n%s", joins, plan, commit, strings.Join(cmds, "\n"))
 	}
 }
 
-func TestInitializeCluster_multiplePods_joinsNonSeed(t *testing.T) {
-	runner, calls := mockRunner(map[string]string{"cluster": ""}, nil)
-	exec := newTestExecutor(runner)
-
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "riak-0", Namespace: "default"}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "riak-1", Namespace: "default"}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "riak-2", Namespace: "default"}},
-	).Build()
-	m := NewManager(exec, client, logr.Discard())
-
-	cluster := &riakv1.RiakCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "riak", Namespace: "default"},
+func TestReconcileMembership_alreadyFormed(t *testing.T) {
+	var cmds []string
+	all := memberTable(nodeOf("riak-0"), nodeOf("riak-1"), nodeOf("riak-2"))
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		cmds = append(cmds, strings.Join(args, " "))
+		return all, nil
 	}
-	if err := m.InitializeCluster(context.Background(), cluster); err != nil {
+	formed, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1", "riak-2"})
+	if err != nil || !formed {
+		t.Fatalf("want formed=true, got %v err=%v", formed, err)
+	}
+	for _, c := range cmds {
+		if strings.Contains(c, "cluster join") || strings.Contains(c, "cluster plan") || strings.Contains(c, "cluster commit") {
+			t.Errorf("an already formed cluster must not be touched, ran: %s", c)
+		}
+	}
+}
+
+func TestReconcileMembership_peerAlreadyInSeedRingIsNotRejoined(t *testing.T) {
+	// riak-2 reports a ring of itself, but the seed already lists it as a member
+	// (join committed, ring still propagating): it must not be joined again.
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, " riak-2 ") {
+			return memberTable(nodeOf("riak-2")), nil
+		}
+		return memberTable(nodeOf("riak-0"), nodeOf("riak-1"), nodeOf("riak-2")), nil
+	}
+	formed, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1", "riak-2"})
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	joinCount := 0
-	for _, c := range *calls {
-		if strings.Contains(strings.Join(c.args, " "), "cluster join") {
-			joinCount++
-		}
-	}
-	if joinCount != 2 {
-		t.Errorf("expected 2 join calls (for riak-1 and riak-2), got %d", joinCount)
+	if !formed {
+		t.Error("riak-2 is already in the seed's ring, cluster is formed")
 	}
 }
 
-func TestInitializeCluster_commitError(t *testing.T) {
-	runner := func(_ context.Context, _ string, args ...string) (string, error) {
-		joined := strings.Join(args, " ")
-		if strings.Contains(joined, "cluster commit") {
-			return "", errors.New("commit failed")
-		}
-		return "", nil
+func TestReconcileMembership_seedMemberStatusError(t *testing.T) {
+	runner := func(_ context.Context, _ string, _ ...string) (string, error) {
+		return "", errors.New("exec failed")
 	}
-	exec := newTestExecutor(runner)
-
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "riak-0", Namespace: "default"}}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	m := NewManager(exec, client, logr.Discard())
-
-	cluster := &riakv1.RiakCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "riak", Namespace: "default"},
-	}
-	err := m.InitializeCluster(context.Background(), cluster)
-	if err == nil {
-		t.Fatal("expected error from commit, got nil")
+	if _, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1"}); err == nil {
+		t.Fatal("expected an error when the seed cannot be queried")
 	}
 }
 
-func TestInitializeCluster_planError(t *testing.T) {
+func TestReconcileMembership_seedNotInMemberStatus(t *testing.T) {
+	runner := func(_ context.Context, _ string, _ ...string) (string, error) {
+		return memberTable("riak@other"), nil
+	}
+	if _, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1"}); err == nil {
+		t.Fatal("expected an error when the seed node is not listed")
+	}
+}
+
+func TestReconcileMembership_joinError(t *testing.T) {
 	runner := func(_ context.Context, _ string, args ...string) (string, error) {
 		joined := strings.Join(args, " ")
-		if strings.Contains(joined, "cluster plan") {
-			return "", errors.New("plan failed")
+		if strings.Contains(joined, "cluster join") {
+			return "", errors.New("join failed")
 		}
-		return "", nil
+		if strings.Contains(joined, " riak-1 ") {
+			return memberTable(nodeOf("riak-1")), nil
+		}
+		return memberTable(nodeOf("riak-0")), nil
 	}
-	exec := newTestExecutor(runner)
-
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "riak-0", Namespace: "default"}}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).Build()
-	m := NewManager(exec, client, logr.Discard())
-
-	cluster := &riakv1.RiakCluster{
-		ObjectMeta: metav1.ObjectMeta{Name: "riak", Namespace: "default"},
+	if _, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1"}); err == nil {
+		t.Fatal("expected join error")
 	}
-	err := m.InitializeCluster(context.Background(), cluster)
-	if err == nil {
-		t.Fatal("expected error from plan, got nil")
+}
+
+func TestReconcileMembership_planAndCommitErrors(t *testing.T) {
+	for _, failing := range []string{"cluster plan", "cluster commit"} {
+		runner := func(_ context.Context, _ string, args ...string) (string, error) {
+			joined := strings.Join(args, " ")
+			if strings.HasSuffix(joined, failing) {
+				return "", errors.New("boom")
+			}
+			if strings.Contains(joined, " riak-1 ") && strings.HasSuffix(joined, "member-status") {
+				return memberTable(nodeOf("riak-1")), nil
+			}
+			if strings.HasSuffix(joined, "member-status") {
+				return memberTable(nodeOf("riak-0")), nil
+			}
+			return "", nil
+		}
+		if _, err := newMembershipManager(runner).ReconcileMembership(
+			context.Background(), membershipCluster(), []string{"riak-0", "riak-1"}); err == nil {
+			t.Errorf("expected error when %q fails", failing)
+		}
+	}
+}
+
+func TestReconcileMembership_peerMemberStatusError(t *testing.T) {
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), " riak-1 ") {
+			return "", errors.New("peer down")
+		}
+		return memberTable(nodeOf("riak-0")), nil
+	}
+	if _, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1"}); err == nil {
+		t.Fatal("expected error when a peer cannot be queried")
+	}
+}
+
+func TestParseMemberStatus(t *testing.T) {
+	out := fmt.Sprintf(soloFmt, "riak@a.b.c")
+	got := parseMemberStatus(out)
+	if len(got) != 1 || got[0].Status != "valid" || got[0].Node != "riak@a.b.c" {
+		t.Fatalf("unexpected parse: %+v", got)
+	}
+	if got := parseMemberStatus("garbage\nnot riak@x a b\n"); len(got) != 0 {
+		t.Fatalf("expected no members, got %+v", got)
 	}
 }

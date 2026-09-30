@@ -7,7 +7,6 @@ import (
 
 	"github.com/go-logr/logr"
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
-	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -37,51 +36,70 @@ func (m *Manager) GetClusterStatus(ctx context.Context, cluster *riakv1.RiakClus
 	return m.executor.GetStatus(ctx, cluster.Namespace, pod, "riak")
 }
 
-// InitializeCluster prepares a Riak cluster for bootstrap.
-func (m *Manager) InitializeCluster(ctx context.Context, cluster *riakv1.RiakCluster) error {
-	m.log.Info("initializing riak cluster", "cluster", cluster.Name)
-
-	// Get all pods
-	pods := &corev1.PodList{}
-	if err := m.k8sClient.List(ctx, pods, client.InNamespace(cluster.Namespace)); err != nil {
-		return err
+// ReconcileMembership joins every standalone node into the ring of the seed
+// pod <cluster>-0 and reports whether all of podNames are now valid members.
+//
+// A freshly started Riak node is its own one-member ring, so nothing forms a
+// multi-node cluster until the operator runs `riak-admin cluster join` on each
+// joining node and then plans and commits once. Node names are read from
+// member-status rather than built from the pod name, so the cluster DNS domain
+// never has to be guessed. It is idempotent: a pod already in the seed's ring is
+// left alone, so it is safe to call on every reconcile.
+func (m *Manager) ReconcileMembership(ctx context.Context, cluster *riakv1.RiakCluster, podNames []string) (bool, error) {
+	seed := cluster.Name + "-0"
+	seedMembers, err := m.executor.MemberStatus(ctx, cluster.Namespace, seed, "riak")
+	if err != nil {
+		return false, fmt.Errorf("member-status on seed %s: %w", seed, err)
 	}
 
-	var clusterPods []corev1.Pod
-	for _, pod := range pods.Items {
-		if strings.HasPrefix(pod.Name, cluster.Name+"-") {
-			clusterPods = append(clusterPods, pod)
+	seedNode := ""
+	inRing := make(map[string]bool, len(seedMembers))
+	valid := 0
+	for _, mem := range seedMembers {
+		inRing[mem.Node] = true
+		if mem.Status == "valid" {
+			valid++
+		}
+		if mem.Node == "riak@"+seed || strings.HasPrefix(mem.Node, "riak@"+seed+".") {
+			seedNode = mem.Node
 		}
 	}
-
-	if len(clusterPods) == 0 {
-		return fmt.Errorf("no cluster pods found")
+	if seedNode == "" {
+		return false, fmt.Errorf("seed node for %s not found in member-status", seed)
 	}
 
-	// Bootstrap the first node
-	firstPod := clusterPods[0]
-	for i := 1; i < len(clusterPods); i++ {
-		nodeName := fmt.Sprintf("riak@%s.%s-headless.%s.svc.cluster.local", clusterPods[i].Name, cluster.Name, cluster.Namespace)
-		_, err := m.executor.ExecuteRiakAdmin(ctx, cluster.Namespace, firstPod.Name, "riak",
-			"cluster", "join", nodeName)
-		if err != nil {
-			m.log.Error(err, "failed to join node", "node", nodeName)
+	joined := 0
+	for _, pod := range podNames {
+		if pod == seed {
 			continue
 		}
+		members, err := m.executor.MemberStatus(ctx, cluster.Namespace, pod, "riak")
+		if err != nil {
+			return false, fmt.Errorf("member-status on %s: %w", pod, err)
+		}
+		// Only a standalone node (a ring of exactly itself) is joined. A node that
+		// already sees other members is either in the seed's ring or a stray ring
+		// that needs an operator, so it is never re-joined automatically.
+		if len(members) != 1 || inRing[members[0].Node] {
+			continue
+		}
+		m.log.Info("joining node to cluster", "cluster", cluster.Name, "pod", pod, "target", seedNode)
+		if err := m.executor.JoinCluster(ctx, cluster.Namespace, pod, "riak", seedNode); err != nil {
+			return false, fmt.Errorf("join %s: %w", pod, err)
+		}
+		joined++
 	}
 
-	// Plan and commit the cluster
-	_, err := m.executor.ExecuteRiakAdmin(ctx, cluster.Namespace, firstPod.Name, "riak", "cluster", "plan")
-	if err != nil {
-		return err
+	if joined > 0 {
+		if _, err := m.executor.ExecuteRiakAdmin(ctx, cluster.Namespace, seed, "riak", "cluster", "plan"); err != nil {
+			return false, fmt.Errorf("cluster plan: %w", err)
+		}
+		if _, err := m.executor.ExecuteRiakAdmin(ctx, cluster.Namespace, seed, "riak", "cluster", "commit"); err != nil {
+			return false, fmt.Errorf("cluster commit: %w", err)
+		}
+		return false, nil // re-check on the next reconcile once the ring settles
 	}
-
-	_, err = m.executor.ExecuteRiakAdmin(ctx, cluster.Namespace, firstPod.Name, "riak", "cluster", "commit")
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return valid == len(podNames), nil
 }
 
 // ConfigureNode sets Riak configuration for a specific node.

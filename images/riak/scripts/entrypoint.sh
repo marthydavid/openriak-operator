@@ -40,14 +40,21 @@ POD_NAMESPACE="${POD_NAMESPACE:-default}"
 
 # Node identity.
 #
-# IMPORTANT: riak-admin derives the target node as riak@$(hostname) and ignores
-# the nodename in riak.conf. If the running node's name does not equal
-# riak@$(hostname), every riak-admin call (security enable/add-user/add-source,
-# bucket-type, grant, status, ...) fails to reach the node — and still exits 0,
-# so the failure is silent. In a StatefulSet pod $(hostname) == $POD_NAME, so we
-# name the node riak@$POD_NAME. The short hostname resolves locally via the pod's
-# /etc/hosts entry, which is enough for a single node.
-if [[ -n "${POD_NAME}" ]]; then
+# Multi-node clusters need a node name every peer can resolve AND that Erlang
+# accepts: with long names (-name) a dotless host such as "riak-0" is rejected as
+# illegal by remote nodes, so a bare pod name only works for a single node. Use the
+# pod's FQDN (<pod>.<headless-svc>.<ns>.svc.<cluster-domain>), which the kubelet
+# writes into /etc/hosts for StatefulSet pods and which resolves cluster-wide
+# through the headless service. Reading it from /etc/hosts avoids assuming the
+# cluster DNS domain. (riak-admin itself must be pointed at the generated vm.args
+# via VMARGS_PATH to find a node named this way; the operator does that.)
+_pod_fqdn=""
+if [[ -n "${POD_IP}" ]]; then
+    _pod_fqdn="$(awk -v ip="${POD_IP}" '$1 == ip && $2 ~ /\./ { print $2; exit }' /etc/hosts)"
+fi
+if [[ -n "${_pod_fqdn}" ]]; then
+    _default_node="riak@${_pod_fqdn}"
+elif [[ -n "${POD_NAME}" ]]; then
     _default_node="riak@${POD_NAME}"
 else
     _default_node="riak@${POD_IP:-127.0.0.1}"

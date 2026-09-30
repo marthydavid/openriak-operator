@@ -53,6 +53,12 @@ func (e *Executor) ExecuteRiakAdmin(ctx context.Context, namespace, podName, con
 		podName,
 		"-c", containerName,
 		"--",
+		// riak-admin calls the release's `riak` script directly, which falls back to
+		// the default vm.args (-sname riak) and so addresses the node as
+		// riak@<short hostname>. Point it at the generated vm.args the node was
+		// started with so it finds the node under its real (FQDN) name.
+		"sh", "-c",
+		"VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args 2>/dev/null | tail -1) exec riak-admin \"$@\"",
 		"riak-admin",
 	}
 	cmdArgs = append(cmdArgs, args...)
@@ -87,6 +93,47 @@ func (e *Executor) GetClusterMembers(ctx context.Context, namespace, podName, co
 		}
 	}
 	return members, nil
+}
+
+// ClusterMember is one row of `riak-admin member-status`.
+type ClusterMember struct {
+	Status string // valid, joining, leaving, exiting, down
+	Node   string // Erlang node name, e.g. riak@pod-0.svc.ns.svc.cluster.local
+}
+
+// MemberStatus returns the members of the ring as seen from podName. A node
+// that has not joined a cluster yet reports a ring containing only itself.
+func (e *Executor) MemberStatus(ctx context.Context, namespace, podName, containerName string) ([]ClusterMember, error) {
+	out, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "member-status")
+	if err != nil {
+		return nil, err
+	}
+	return parseMemberStatus(out), nil
+}
+
+// parseMemberStatus extracts the rows of the member-status table:
+//
+//	valid     100.0%      --      riak@node-0
+func parseMemberStatus(output string) []ClusterMember {
+	var members []ClusterMember
+	for _, line := range strings.Split(output, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 4 || !strings.HasPrefix(f[3], "riak@") {
+			continue
+		}
+		switch f[0] {
+		case "valid", "joining", "leaving", "exiting", "down":
+			members = append(members, ClusterMember{Status: f[0], Node: f[3]})
+		}
+	}
+	return members
+}
+
+// JoinCluster stages a join of podName's node into the ring that contains
+// targetNode. riak-admin must run on the joining node.
+func (e *Executor) JoinCluster(ctx context.Context, namespace, podName, containerName, targetNode string) error {
+	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "cluster", "join", targetNode)
+	return err
 }
 
 // PlanCluster stages a cluster membership change.

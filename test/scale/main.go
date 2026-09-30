@@ -61,6 +61,7 @@ type opts struct {
 	poll      time.Duration
 	keep      bool
 	ephemeral bool
+	replicas  int
 }
 
 func main() {
@@ -74,6 +75,7 @@ func main() {
 	flag.DurationVar(&o.timeout, "timeout", 20*time.Minute, "overall deadline for everything to reach Ready")
 	flag.DurationVar(&o.poll, "poll", 5*time.Second, "status poll interval")
 	flag.BoolVar(&o.keep, "keep", false, "keep resources after the run instead of deleting them")
+	flag.IntVar(&o.replicas, "replicas", 1, "Riak nodes per RiakCluster (spec.size)")
 	flag.BoolVar(&o.ephemeral, "ephemeral", false,
 		"use emptyDir (spec.ephemeralStorage) instead of PVCs; for clusters without a storage provisioner")
 	flag.Parse()
@@ -181,7 +183,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for i := 0; i < o.clusters; i++ {
 		cl := fmt.Sprintf("scale-c%03d", i)
-		size := int32(1)
+		size := int32(o.replicas)
 		spec := riakv1.RiakClusterSpec{
 			Size:       size,
 			Image:      o.image,

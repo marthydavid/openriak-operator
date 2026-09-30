@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
+	"github.com/marthydavid/openriak-operator/internal/riak"
 )
 
 const (
@@ -55,7 +56,8 @@ const (
 type RiakClusterReconciler struct {
 	client.Client
 	Scheme       *runtime.Scheme
-	DefaultImage string // fallback image when spec.image is empty; defaults to defaultRiakImage
+	DefaultImage string         // fallback image when spec.image is empty; defaults to defaultRiakImage
+	Executor     *riak.Executor // if nil, a real executor is created per reconcile
 }
 
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch;create;update;patch;delete
@@ -647,6 +649,27 @@ func (r *RiakClusterReconciler) updateClusterStatus(ctx context.Context, cluster
 
 	allReady := readyCount == cluster.Spec.Size
 
+	// Pods being Ready only means each node is up — every Riak node starts as its
+	// own one-member ring. A multi-node cluster is Ready once the nodes have
+	// actually been joined into one ring.
+	formed := true
+	if allReady && cluster.Spec.Size > 1 {
+		podNames := make([]string, 0, len(pods.Items))
+		for i := range pods.Items {
+			podNames = append(podNames, pods.Items[i].Name)
+		}
+		executor := r.Executor
+		if executor == nil {
+			executor = riak.NewExecutor(log.FromContext(ctx))
+		}
+		var err error
+		formed, err = riak.NewManager(executor, r.Client, log.FromContext(ctx)).ReconcileMembership(ctx, cluster, podNames)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "failed to reconcile cluster membership")
+			formed = false
+		}
+	}
+
 	cluster.Status.ReadyNodes = readyCount
 	// TotalNodes is the desired size, so readyNodes/totalNodes reads as progress
 	// towards the spec rather than towards however many pods currently exist.
@@ -661,10 +684,14 @@ func (r *RiakClusterReconciler) updateClusterStatus(ctx context.Context, cluster
 	cluster.Status.Buckets = buckets
 	cluster.Status.Users = users
 
-	if allReady {
+	if allReady && formed {
 		cluster.Status.Phase = riakv1.PhaseReady
 		setCondition(&cluster.Status.Conditions, conditionReady, true, cluster.Generation,
 			"ClusterReady", "Riak cluster is ready")
+	} else if allReady {
+		cluster.Status.Phase = riakv1.PhaseCreating
+		setCondition(&cluster.Status.Conditions, conditionReady, false, cluster.Generation,
+			"FormingCluster", "Waiting for all Riak nodes to join the ring")
 	} else {
 		cluster.Status.Phase = riakv1.PhaseCreating
 		setCondition(&cluster.Status.Conditions, conditionReady, false, cluster.Generation,
