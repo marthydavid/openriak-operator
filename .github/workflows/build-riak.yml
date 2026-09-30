@@ -72,7 +72,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -85,8 +85,11 @@ jobs:
         with:
           images: ghcr.io/marthydavid/riak
           tags: |
-            type=raw,value=${{ matrix.riak_version }}
-            type=raw,value=${{ matrix.riak_minor }}
+            # Production tags are never written by PR builds.
+            type=raw,value=${{ matrix.riak_version }},enable=${{ github.event_name != 'pull_request' }}
+            type=raw,value=${{ matrix.riak_minor }},enable=${{ github.event_name != 'pull_request' }}
+            # Non-production: same-repo PR builds are pushed as <version>-pr-<N>.
+            type=raw,value=${{ matrix.riak_version }}-pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
             # `latest` follows the default (3.2.x) variant on main only.
             type=raw,value=latest,enable=${{ matrix.is_default && github.ref == 'refs/heads/main' }}
 
@@ -95,7 +98,7 @@ jobs:
         with:
           context: images/riak
           platforms: ${{ matrix.platforms }}
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |

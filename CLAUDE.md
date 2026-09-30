@@ -146,7 +146,7 @@ make docker-push  IMG=ghcr.io/marthydavid/openriak-operator:dev
 
 Operator tags: semver on `v*` tags, short-SHA on every push, `latest` on `main`.  
 Riak tags: patch + minor alias per matrix entry (`3.0.16`/`3.0`, `3.2.6`/`3.2`, `3.4.0`/`3.4`); `latest` follows the 3.2.x default on `main`.  
-PRs build but do **not** push (no registry credentials needed).
+Same-repo PRs also push **non-production** tags only: `openriak-operator:pr-<N>` (+ short SHA) and `riak:<version>-pr-<N>`. They never write the production tags (`3.2.6`, `3.2`, `latest`). Fork PRs build without pushing (no write token).
 
 The controller's fallback image (when `spec.image` is omitted) is `ghcr.io/marthydavid/riak:3.2.6`.
 

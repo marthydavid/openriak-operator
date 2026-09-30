@@ -34,6 +34,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"time"
 
@@ -151,7 +152,33 @@ func ensureIssuer(ctx context.Context, c client.Client, ns string) error {
 	return nil
 }
 
+// randomGrants returns 1-4 distinct per-bucket grants with random permissions
+// against the cluster's buckets (bucket-NNN), or a read-any grant when the
+// cluster has no buckets.
+func randomGrants(rng *rand.Rand, buckets int) []riakv1.Grant {
+	if buckets == 0 {
+		return []riakv1.Grant{{Resource: "any", Permission: "read"}}
+	}
+	perms := []string{"read", "write", "delete", "list", "admin"}
+	n := 1 + rng.Intn(4)
+	seen := map[string]bool{}
+	var grants []riakv1.Grant
+	for len(grants) < n {
+		g := riakv1.Grant{
+			Resource:   "bucket",
+			BucketName: fmt.Sprintf("bucket-%03d", rng.Intn(buckets)),
+			Permission: perms[rng.Intn(len(perms))],
+		}
+		if k := g.BucketName + "/" + g.Permission; !seen[k] {
+			seen[k] = true
+			grants = append(grants, g)
+		}
+	}
+	return grants
+}
+
 func createAll(ctx context.Context, c client.Client, o opts) error {
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for i := 0; i < o.clusters; i++ {
 		cl := fmt.Sprintf("scale-c%03d", i)
 		size := int32(1)
@@ -181,7 +208,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 					CertificateRef: &riakv1.UserCertificateRef{
 						IssuerRef: riakv1.CertIssuerRef{Name: "scale-issuer", Kind: "Issuer"},
 					},
-					Grants: []riakv1.Grant{{Resource: "any", Permission: "read"}},
+					Grants: randomGrants(rng, o.buckets),
 				},
 			}
 			if err := c.Create(ctx, user); err != nil && !apiAlreadyExists(err) {
