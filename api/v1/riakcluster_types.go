@@ -302,6 +302,11 @@ const (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Nodes",type=string,JSONPath=`.status.readyNodes`
+// +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=`.status.totalNodes`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // RiakCluster is the Schema for the riakclusters API.
 type RiakCluster struct {

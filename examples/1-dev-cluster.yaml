@@ -7,7 +7,7 @@ spec:
   size: 3
   image: ghcr.io/marthydavid/riak:3.2.6
   imagePullPolicy: IfNotPresent
-  
+
   resources:
     requests:
       cpu: 500m
@@ -15,14 +15,15 @@ spec:
     limits:
       cpu: 1000m
       memory: 2Gi
-  
+
   storageClassName: standard
   storageSize: 10Gi
   servicePort: 8087
   
+
   riakConfig:
     "ring_size": "64"
     "transfer_limit": "2"
     "handoff_port": "8099"
-  
+
   nodeSelector: {}
