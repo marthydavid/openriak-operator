@@ -383,6 +383,39 @@ spec:
 			Expect(out).To(Equal("1"))
 		})
 
+		It("the Riak node answers riak-admin status inside the pod", func() {
+			// Regression: the entrypoint used to gate on `riak ping`, which never
+			// succeeds in this image even though the node is healthy.
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
+					"riak-admin", "status")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(out).To(ContainSubstring("stats for"))
+			}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		})
+
+		It("the Riak container stays up past the entrypoint startup timeout", func() {
+			// Regression: every pod used to exit 1 at ~2m17s (RIAK_START_TIMEOUT=120s)
+			// while the TCP-only probes kept it looking Ready. Observe the pod for
+			// longer than that and require zero container restarts.
+			By("waiting past the 120s entrypoint startup window")
+			Consistently(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pod", clusterName+"-0", "-n", riakNS,
+					"-o", "jsonpath={.status.containerStatuses[?(@.name=='riak')].restartCount}")
+				out, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(strings.TrimSpace(out)).To(Equal("0"), "riak container restarted")
+			}, 170*time.Second, 10*time.Second).Should(Succeed())
+
+			By("verifying the cluster is still Ready")
+			cmd := exec.Command("kubectl", "get", "riakcluster", clusterName,
+				"-n", riakNS, "-o", "jsonpath={.status.phase}")
+			out, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(out).To(Equal("Ready"))
+		})
+
 		It("operator sets a finalizer and a status phase for the RiakBucket", func() {
 			By("verifying the operator sets a finalizer on the RiakBucket")
 			Eventually(func(g Gomega) {
