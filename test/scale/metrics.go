@@ -180,7 +180,7 @@ func serviceMonitorSelects(ctx context.Context, c client.Client, cl riakv1.RiakC
 			}
 		}
 	}
-	return fmt.Sprintf("ServiceMonitor selector %v matches no Service with a metrics port: Prometheus would find no targets", match)
+	return fmt.Sprintf("ServiceMonitor selector %v matches no Service with a metrics port: no targets", match)
 }
 
 // verifyMetricsEventually retries verifyMetrics: exporters start after Riak
