@@ -224,3 +224,9 @@ cannot be balanced across a few nodes (8 partitions over 3 nodes is 4/2/2 = 50/2
 entrypoint defaults to 128, and `test/scale` refuses `-ring-size` below 128 and fails verification
 when any node owns more or fewer partitions than `ring_size/nodes` rounded down/up. `ring_size`
 cannot be changed on an existing cluster; recreate it.
+
+## Releasing
+
+Releases (operator `v*` tag + chart `chart-v*` tag, version bumps across all references, release
+notes, CI verification) are described in the `release` skill: `.claude/skills/release/SKILL.md`.
+Ask Claude to "cut a release" and it follows that skill. Always release from `main`.
