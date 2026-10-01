@@ -881,6 +881,39 @@ var _ = Describe("RiakCluster Controller", func() {
 		})
 	})
 
+	Context("reconcileService labels", func() {
+		const clusterName = "svc-label-cluster"
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		// The ServiceMonitor selects the client Service by app/cluster labels;
+		// without them Prometheus finds no targets. The headless Service must
+		// stay unlabelled or every pod would be scraped twice.
+		It("labels only the client Service so the ServiceMonitor selects it", func() {
+			cluster := &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec: riakv1.RiakClusterSpec{
+					Size:       1,
+					Image:      "basho/riak-kv:latest",
+					Monitoring: &riakv1.MonitoringConfig{Enabled: true},
+				},
+			}
+			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+
+			r := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+			Expect(r.reconcileService(ctx, cluster)).To(Succeed())
+
+			clientSvc := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: ns}, clientSvc)).To(Succeed())
+			Expect(clientSvc.Labels).To(HaveKeyWithValue("app", "riak"))
+			Expect(clientSvc.Labels).To(HaveKeyWithValue("cluster", clusterName))
+
+			headless := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName + "-headless", Namespace: ns}, headless)).To(Succeed())
+			Expect(headless.Labels).NotTo(HaveKey("app"))
+		})
+	})
+
 	Context("reconcileService with TLS", func() {
 		const clusterName = "svc-tls-cluster"
 		nn := types.NamespacedName{Name: clusterName, Namespace: ns}

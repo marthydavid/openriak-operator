@@ -27,6 +27,12 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
@@ -120,6 +126,9 @@ func verifyMetrics(ctx context.Context, c client.Client, o opts) ([]string, erro
 		if !cl.Status.MonitoringStatus.Enabled || !cl.Status.MonitoringStatus.ExporterReady {
 			fail("%s: monitoringStatus not ready (%+v)", cl.Name, cl.Status.MonitoringStatus)
 		}
+		if p := serviceMonitorSelects(ctx, c, cl); p != "" {
+			fail("%s: %s", cl.Name, p)
+		}
 		for i := int32(0); i < cl.Spec.Size; i++ {
 			pod := fmt.Sprintf("%s-%d", cl.Name, i)
 			wg.Add(1)
@@ -141,6 +150,37 @@ func verifyMetrics(ctx context.Context, c client.Client, o opts) ([]string, erro
 	wg.Wait()
 	sort.Strings(problems)
 	return problems, nil
+}
+
+// serviceMonitorSelects checks what Prometheus would do: the cluster's
+// ServiceMonitor selector must match a Service that exposes the metrics port.
+// A skipped ServiceMonitor (no Prometheus Operator CRDs) is not a problem.
+func serviceMonitorSelects(ctx context.Context, c client.Client, cl riakv1.RiakCluster) string {
+	sm := &unstructured.Unstructured{}
+	sm.SetGroupVersionKind(schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"})
+	if err := c.Get(ctx, client.ObjectKey{Namespace: cl.Namespace, Name: cl.Name + "-metrics"}, sm); err != nil {
+		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+			return ""
+		}
+		return fmt.Sprintf("get ServiceMonitor: %v", err)
+	}
+	match, _, _ := unstructured.NestedStringMap(sm.Object, "spec", "selector", "matchLabels")
+	sel := labels.SelectorFromSet(match)
+	svcs := &corev1.ServiceList{}
+	if err := c.List(ctx, svcs, client.InNamespace(cl.Namespace)); err != nil {
+		return fmt.Sprintf("list Services: %v", err)
+	}
+	for _, s := range svcs.Items {
+		if !sel.Matches(labels.Set(s.Labels)) {
+			continue
+		}
+		for _, p := range s.Spec.Ports {
+			if p.Name == "metrics" {
+				return ""
+			}
+		}
+	}
+	return fmt.Sprintf("ServiceMonitor selector %v matches no Service with a metrics port: Prometheus would find no targets", match)
 }
 
 // verifyMetricsEventually retries verifyMetrics: exporters start after Riak
