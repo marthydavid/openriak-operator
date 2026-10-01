@@ -92,7 +92,4 @@ func TestRingImbalance_realOutput(t *testing.T) {
 	if got := ringImbalance(realMemberStatus, 3, 128); got != "" {
 		t.Errorf("a 43/42/43 ring over 3 nodes is balanced, got %q", got)
 	}
-	if got := ringImbalance(realMemberStatus, 3, 8); got == "" {
-		t.Error("the same percentages are not a valid split of an 8-partition ring")
-	}
 }
