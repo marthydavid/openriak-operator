@@ -25,7 +25,8 @@ func TestOperatorProblems(t *testing.T) {
 	}
 	oom := &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137}
 	bad := operatorProblems([]corev1.Pod{opPod(6, oom, corev1.PodRunning)})
-	if len(bad) != 1 || !strings.Contains(bad[0], "restarted 6 times") || !strings.Contains(bad[0], "OOMKilled (exit 137)") {
+	if len(bad) != 1 || !strings.Contains(bad[0], "restarted 6 times") ||
+		!strings.Contains(bad[0], "OOMKilled (exit 137)") {
 		t.Fatalf("an OOMKill loop must be reported with its reason: %v", bad)
 	}
 	if bad := operatorProblems([]corev1.Pod{opPod(0, nil, corev1.PodPending)}); len(bad) != 1 {

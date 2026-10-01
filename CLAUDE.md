@@ -18,8 +18,12 @@ CI runs golangci-lint v1.59.1 under Go 1.22 (`.github/workflows/lint.yml`). Run 
 or it reports nothing useful:
 
 ```bash
-GOTOOLCHAIN=go1.22.12 golangci-lint run
+GOTOOLCHAIN=go1.22.12 make lint      # installs the pinned v1.59.1 into bin/ and runs it
+hack/pre-push.sh                     # gofmt + vet + pinned lint + unit tests: run before EVERY push
 ```
+
+A globally installed `golangci-lint` is typically a newer major version that cannot read
+`.golangci.yml`; do not use it. See `.claude/skills/pre-push/SKILL.md`.
 
 Without the pinned toolchain, a newer local Go emits export data that v1.59.1 cannot parse, and
 every file drowns in bogus `typecheck` errors (`r.Get undefined`, `undefined: Expect`) that mask

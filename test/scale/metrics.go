@@ -253,7 +253,8 @@ func exerciseDeltas(before, after map[string]map[string]float64, coord string) [
 		vputs += stat(after[pod], "riak_vnode_puts_total") - stat(before[pod], "riak_vnode_puts_total")
 	}
 	if vputs < 2 {
-		bad = append(bad, fmt.Sprintf("riak_vnode_puts_total summed over the cluster rose by %v, want >= 2 (a write quorum)", vputs))
+		bad = append(bad, fmt.Sprintf(
+			"riak_vnode_puts_total summed over the cluster rose by %v, want >= 2 (a write quorum)", vputs))
 	}
 	return bad
 }
@@ -330,7 +331,8 @@ func printMetricsSummary(cluster string, before, after map[string]map[string]flo
 	fmt.Printf("  %s\n", cluster)
 	for _, p := range pods {
 		a, b := after[p], before[p]
-		fmt.Printf("    %-13s partitions=%-4.0f vnode_puts=%.0f(+%.0f) vnode_gets=%.0f(+%.0f) node_puts=%.0f(+%.0f) node_gets=%.0f(+%.0f) mem=%.0fMiB procs=%.0f pbc_active=%.0f\n",
+		fmt.Printf("    %-13s partitions=%-4.0f vnode_puts=%.0f(+%.0f) vnode_gets=%.0f(+%.0f) "+
+			"node_puts=%.0f(+%.0f) node_gets=%.0f(+%.0f) mem=%.0fMiB procs=%.0f pbc_active=%.0f\n",
 			p, a["riak_ring_num_partitions"],
 			a["riak_vnode_puts_total"], a["riak_vnode_puts_total"]-b["riak_vnode_puts_total"],
 			a["riak_vnode_gets_total"], a["riak_vnode_gets_total"]-b["riak_vnode_gets_total"],

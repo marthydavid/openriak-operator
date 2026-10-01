@@ -93,7 +93,8 @@ func main() {
 		"enable spec.monitoring (json_exporter sidecar) on every cluster and verify the riak_* metrics on every node")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
-	flag.StringVar(&o.operatorNamespace, "operator-namespace", "", "namespace of the operator pod, checked for restarts/OOMKills (default: find by label in any namespace)")
+	flag.StringVar(&o.operatorNamespace, "operator-namespace", "",
+		"namespace of the operator pod, checked for restarts/OOMKills (default: find it by label in any namespace)")
 	flag.IntVar(&o.ringSize, "ring-size", minRingSize,
 		"Riak ring_size (a power of two, at least 128). Tiny rings cannot balance: 8 partitions over 3 nodes is 4/2/2")
 	flag.IntVar(&o.verifyWorkers, "verify-workers", 6, "parallel kubectl exec calls while verifying")
