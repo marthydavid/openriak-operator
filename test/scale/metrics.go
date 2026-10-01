@@ -193,7 +193,8 @@ func scrapeObjectProblem(ctx context.Context, c client.Client, cl riakv1.RiakClu
 	}
 
 	pods := &corev1.PodList{}
-	if err := c.List(ctx, pods, client.InNamespace(cl.Namespace), client.MatchingLabelsSelector{Selector: sel}); err != nil {
+	listOpts := []client.ListOption{client.InNamespace(cl.Namespace), client.MatchingLabelsSelector{Selector: sel}}
+	if err := c.List(ctx, pods, listOpts...); err != nil {
 		return fmt.Sprintf("list Pods: %v", err)
 	}
 	targets := 0
@@ -207,7 +208,8 @@ func scrapeObjectProblem(ctx context.Context, c client.Client, cl riakv1.RiakClu
 		}
 	}
 	if int32(targets) != cl.Spec.Size {
-		return fmt.Sprintf("PodMonitor selector %v matches %d pods with a metrics port, want %d", match, targets, cl.Spec.Size)
+		return fmt.Sprintf("PodMonitor selector %v matches %d pods with a metrics port, want %d",
+			match, targets, cl.Spec.Size)
 	}
 	return ""
 }
