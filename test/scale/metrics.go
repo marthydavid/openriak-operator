@@ -38,10 +38,6 @@ import (
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
 )
 
-// scaleRingSize is the ring_size createAll sets on every cluster; the exporter
-// must report it back as riak_ring_num_partitions.
-const scaleRingSize = 8
-
 // requiredMetrics must be present on every node once the exporter works.
 var requiredMetrics = []string{
 	"riak_node_gets_total",
@@ -49,6 +45,9 @@ var requiredMetrics = []string{
 	"riak_vnode_gets_total",
 	"riak_ring_num_partitions",
 	"riak_memory_system",
+	"riak_memory_processes",
+	"riak_sys_process_count",
+	"riak_node_get_fsm_time_95",
 }
 
 // scrapeMetrics fetches the exporter's Riak probe from one pod through the
@@ -90,17 +89,33 @@ func parseMetrics(body string) map[string]float64 {
 	return m
 }
 
-// checkMetrics returns what is wrong with one node's scrape.
-func checkMetrics(m map[string]float64) []string {
+// checkMetrics returns what is wrong with one node's scrape. ringSize is the
+// ring_size the cluster was configured with: the exporter must report it back
+// as riak_ring_num_partitions, which ties the exporter to live Riak rather than
+// just to the shape of its output.
+func checkMetrics(m map[string]float64, ringSize int) []string {
 	var bad []string
 	for _, name := range requiredMetrics {
 		if _, ok := m[name]; !ok {
 			bad = append(bad, "missing "+name)
 		}
 	}
-	if v, ok := m["riak_ring_num_partitions"]; ok && int(v) != scaleRingSize {
-		bad = append(bad, fmt.Sprintf("riak_ring_num_partitions=%v, want %d", v, scaleRingSize))
+	if v, ok := m["riak_ring_num_partitions"]; ok && int(v) != ringSize {
+		bad = append(bad, fmt.Sprintf("riak_ring_num_partitions=%v, want %d", v, ringSize))
 	}
+	// A running BEAM always has memory and processes; zero or negative values mean
+	// the exporter is reading the wrong field, not an idle node.
+	for _, name := range []string{"riak_memory_system", "riak_memory_processes", "riak_sys_process_count"} {
+		if v, ok := m[name]; ok && v <= 0 {
+			bad = append(bad, fmt.Sprintf("%s=%v, want > 0", name, v))
+		}
+	}
+	for name, v := range m {
+		if v < 0 {
+			bad = append(bad, fmt.Sprintf("%s=%v is negative", name, v))
+		}
+	}
+	sort.Strings(bad)
 	return bad
 }
 
@@ -141,7 +156,7 @@ func verifyMetrics(ctx context.Context, c client.Client, o opts) ([]string, erro
 					fail("%v", err)
 					return
 				}
-				for _, b := range checkMetrics(parseMetrics(body)) {
+				for _, b := range checkMetrics(parseMetrics(body), ringSizeOf(cl)) {
 					fail("%s: %s", pod, b)
 				}
 			}()
