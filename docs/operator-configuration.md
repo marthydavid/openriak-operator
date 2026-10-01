@@ -139,3 +139,15 @@ coordinator redirects, protocol-buffer connections, object sizes, and Erlang VM 
 lives in a ConfigMap the operator generates; scrape metrics from the exporter's `/probe` endpoint
 (`/probe?module=riak&target=http://<pod>:8098/stats`), which is what the generated ServiceMonitor
 does. These names map directly onto the community Riak Grafana dashboards.
+
+### Checking the metrics by hand
+
+```bash
+kubectl port-forward pod/my-cluster-0 7979:7979 &
+curl -s 'localhost:7979/probe?module=riak&target=http://127.0.0.1:8098/stats' | grep '^riak_'
+```
+
+Or without a port-forward, through the apiserver:
+`kubectl get --raw '/api/v1/namespaces/<ns>/pods/<pod>:7979/proxy/probe?module=riak&target=http://127.0.0.1:8098/stats'`.
+`status.monitoringStatus.exporterReady` is true once every node's sidecar is ready. The
+[scale test](scaling.md#verifying-riak-metrics) automates this check across a whole fleet.
