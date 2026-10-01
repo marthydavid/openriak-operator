@@ -515,7 +515,7 @@ spec:
 
 ### Tuning Recommendations
 
-- **Ring Size**: 64-128 for small clusters (3-5 nodes), 256+ for larger clusters
+- **Ring Size**: at least 128 (a power of two); 256+ for larger clusters. A small ring cannot be spread evenly over a few nodes (8 partitions over 3 nodes is 4/2/2)
 - **Transfer Limit**: Number of concurrent handoffs (2-4 typical)
 - **Anti-Entropy**: Enable for production clusters
 - **Backend**: Choose LevelDB for modern deployments

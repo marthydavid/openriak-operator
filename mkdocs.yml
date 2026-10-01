@@ -41,6 +41,7 @@ nav:
       - RiakUser: crds/riakuser.md
       - RiakBucket: crds/riakbucket.md
   - Examples: examples.md
+  - Release notes: release-notes.md
   - Platform reference:
       - Vanilla Kubernetes: platforms/kubernetes.md
       - OpenShift: platforms/openshift.md
