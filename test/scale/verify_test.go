@@ -26,7 +26,7 @@ func memberTable(pcts ...string) string {
 	var b strings.Builder
 	b.WriteString("Status     Ring    Pending    Node\n-----\n")
 	for i, p := range pcts {
-		fmt.Fprintf(&b, "|valid|%s|--|riak@n-%d.svc|\n", p, i)
+		fmt.Fprintf(&b, "valid      %s      --      riak@n-%d.svc\n", p, i)
 	}
 	return b.String()
 }
@@ -73,5 +73,26 @@ Cumulative permissions (user/u)
 	got := parseGrants(out)
 	if !got["* *"]["riak_kv.get"] || !got["t1 b1"]["riak_kv.put"] || !got["t1 b1"]["riak_kv.get"] {
 		t.Errorf("unexpected parse: %+v", got)
+	}
+}
+
+// realMemberStatus is verbatim `riak-admin member-status` output from a 3-node,
+// ring_size 128 cluster.
+const realMemberStatus = `================================= Membership ==================================
+Status     Ring    Pending    Node
+-------------------------------------------------------------------------------
+valid      33.6%      --      riak@scale-c000-0.scale-c000-headless.scale-test.svc.cluster.local
+valid      32.8%      --      riak@scale-c000-1.scale-c000-headless.scale-test.svc.cluster.local
+valid      33.6%      --      riak@scale-c000-2.scale-c000-headless.scale-test.svc.cluster.local
+-------------------------------------------------------------------------------
+Valid:3 / Leaving:0 / Exiting:0 / Joining:0 / Down:0
+`
+
+func TestRingImbalance_realOutput(t *testing.T) {
+	if got := ringImbalance(realMemberStatus, 3, 128); got != "" {
+		t.Errorf("a 43/42/43 ring over 3 nodes is balanced, got %q", got)
+	}
+	if got := ringImbalance(realMemberStatus, 3, 8); got == "" {
+		t.Error("the same percentages are not a valid split of an 8-partition ring")
 	}
 }

@@ -242,17 +242,20 @@ func ringImbalance(memberStatus string, nodes, ringSize int) string {
 	owned := make([]string, 0, nodes)
 	bad := false
 	rows := 0
-	for _, cells := range tableRows(memberStatus) {
-		if len(cells) != 4 || cells[0] == "Status" {
+	// member-status rows are whitespace separated, not a boxed table:
+	//   valid      33.6%      --      riak@node-0.svc
+	for _, line := range strings.Split(memberStatus, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 4 || !strings.HasPrefix(f[3], "riak@") {
 			continue
 		}
-		pct, err := strconv.ParseFloat(strings.TrimSuffix(cells[1], "%"), 64)
+		pct, err := strconv.ParseFloat(strings.TrimSuffix(f[1], "%"), 64)
 		if err != nil {
 			continue
 		}
 		rows++
 		parts := pct / 100 * float64(ringSize)
-		owned = append(owned, fmt.Sprintf("%s=%.1f%% (~%.1f partitions)", cells[3], pct, parts))
+		owned = append(owned, fmt.Sprintf("%s=%.1f%% (~%.1f partitions)", f[3], pct, parts))
 		if parts < float64(lo)-tol*float64(ringSize)/100 || parts > float64(hi)+tol*float64(ringSize)/100 {
 			bad = true
 		}
