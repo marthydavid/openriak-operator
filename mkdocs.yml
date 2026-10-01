@@ -48,4 +48,5 @@ nav:
       - mTLS with cert-manager: mtls.md
       - Operator configuration: operator-configuration.md
       - Scaling: scaling.md
+      - Scale test results: scale-test-results.md
       - Troubleshooting: troubleshooting.md
