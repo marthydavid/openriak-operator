@@ -3,9 +3,21 @@ name: Build Operator Image
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "**.md"
+      - ".claude/**"
+      - ".github/workflows/docs.yml"
     tags: ['v*']
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "**.md"
+      - ".claude/**"
+      - ".github/workflows/docs.yml"
 
 permissions:
   contents: read
