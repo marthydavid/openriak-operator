@@ -1,0 +1,87 @@
+# Example alerts built only from series in the operator's default exporter mapping
+# (exporterConfig in internal/controller/monitoring.go). Latency series are in
+# MICROSECONDS. Assumes the "cluster" label added by podmonitor.yaml
+# (podTargetLabels). Tune thresholds to your workload.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: riak-alerts
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: openriak
+    # release: kube-prometheus-stack   # match your Prometheus ruleSelector
+spec:
+  groups:
+    - name: riak.availability
+      rules:
+        - alert: RiakExporterDown
+          expr: up{cluster=~".+", pod=~".+"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Riak metrics target down: {{ $labels.pod }}"
+            description: >-
+              Prometheus cannot scrape the json_exporter sidecar of {{ $labels.pod }}
+              (cluster {{ $labels.cluster }}). Either the sidecar or the Riak HTTP
+              listener (:8098/stats) is not answering.
+            runbook: >-
+              kubectl -n {{ $labels.namespace }} get pod {{ $labels.pod }};
+              kubectl -n {{ $labels.namespace }} logs {{ $labels.pod }} -c metrics-exporter;
+              kubectl -n {{ $labels.namespace }} exec {{ $labels.pod }} -c riak -- riak-admin status
+        - alert: RiakRingSizeInconsistent
+          expr: |
+            max by (namespace, cluster) (riak_ring_num_partitions)
+              != min by (namespace, cluster) (riak_ring_num_partitions)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nodes of Riak cluster {{ $labels.cluster }} report different ring sizes"
+            description: >-
+              riak_ring_num_partitions differs between nodes. A node may have joined with
+              a different ring_size or is not yet part of the ring. ring_size cannot be
+              changed on an existing cluster; recreate the cluster.
+            runbook: "kubectl exec <pod> -c riak -- riak-admin ring-status; riak-admin member-status"
+    - name: riak.performance
+      rules:
+        - alert: RiakGetLatencyHigh
+          expr: riak_node_get_fsm_time_99 > 500000
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "GET p99 above 500ms on {{ $labels.pod }}"
+            description: "99th percentile GET latency is {{ $value }} microseconds."
+            runbook: >-
+              Check disk I/O and vnode queue pressure on the pod's node, compaction, and
+              whether one node is an outlier (compare the dashboard latency panel).
+        - alert: RiakPutLatencyHigh
+          expr: riak_node_put_fsm_time_99 > 500000
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PUT p99 above 500ms on {{ $labels.pod }}"
+            description: "99th percentile PUT latency is {{ $value }} microseconds."
+            runbook: "Check storage latency and object size growth (riak_node_get_fsm_objsize_99)."
+        - alert: RiakReadRepairRateHigh
+          expr: sum by (namespace, cluster) (riak_read_repairs) > 100
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Sustained read repairs in Riak cluster {{ $labels.cluster }}"
+            description: >-
+              {{ $value }} read repairs in the last minute, sustained. Replicas are
+              diverging: look for a recently restarted or partitioned node.
+            runbook: "riak-admin transfers; riak-admin aae-status"
+        - alert: RiakPBConnectionsHigh
+          expr: riak_pbc_active > 500
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Many Protocol Buffers connections on {{ $labels.pod }}"
+            description: "{{ $value }} active PB connections. Likely a client connection leak or missing pooling."
+            runbook: "Check client pool sizes and the growth of riak_pbc_connects_total."
