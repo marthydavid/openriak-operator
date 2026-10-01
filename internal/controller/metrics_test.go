@@ -34,32 +34,32 @@ import (
 )
 
 func metricsTestObjects() []client.Object {
-	meta := func(ns, name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: ns, Name: name} }
+	meta := func(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: "ns1", Name: name} }
 	return []client.Object{
 		&riakv1.RiakCluster{
-			ObjectMeta: meta("ns1", "c1"),
+			ObjectMeta: meta("c1"),
 			Status: riakv1.RiakClusterStatus{
 				Phase: riakv1.PhaseReady, ReadyNodes: 3, TotalNodes: 3,
 				TLSStatus:        riakv1.TLSStatus{Enabled: true, ClientReady: true},
 				MonitoringStatus: riakv1.MonitoringStatus{Enabled: true, ExporterReady: true},
 			},
 		},
-		&riakv1.RiakCluster{ObjectMeta: meta("ns1", "c2")}, // no status yet
+		&riakv1.RiakCluster{ObjectMeta: meta("c2")}, // no status yet
 		&riakv1.RiakBucket{
-			ObjectMeta: meta("ns1", "b1"), Spec: riakv1.RiakBucketSpec{ClusterName: "c1"},
+			ObjectMeta: meta("b1"), Spec: riakv1.RiakBucketSpec{ClusterName: "c1"},
 			Status: riakv1.RiakBucketStatus{Phase: riakv1.BucketPhaseReady},
 		},
 		&riakv1.RiakBucket{
-			ObjectMeta: meta("ns1", "b2"), Spec: riakv1.RiakBucketSpec{ClusterName: "c1"},
+			ObjectMeta: meta("b2"), Spec: riakv1.RiakBucketSpec{ClusterName: "c1"},
 			Status: riakv1.RiakBucketStatus{Phase: riakv1.BucketPhaseReady},
 		},
-		&riakv1.RiakBucket{ObjectMeta: meta("ns1", "b3"), Spec: riakv1.RiakBucketSpec{ClusterName: "c1"}},
+		&riakv1.RiakBucket{ObjectMeta: meta("b3"), Spec: riakv1.RiakBucketSpec{ClusterName: "c1"}},
 		&riakv1.RiakUser{
-			ObjectMeta: meta("ns1", "u1"), Spec: riakv1.RiakUserSpec{ClusterName: "c1"},
+			ObjectMeta: meta("u1"), Spec: riakv1.RiakUserSpec{ClusterName: "c1"},
 			Status: riakv1.RiakUserStatus{Phase: riakv1.UserPhaseReady, CertificateReady: true},
 		},
 		&riakv1.RiakUser{
-			ObjectMeta: meta("ns1", "u2"), Spec: riakv1.RiakUserSpec{ClusterName: "c1"},
+			ObjectMeta: meta("u2"), Spec: riakv1.RiakUserSpec{ClusterName: "c1"},
 			Status: riakv1.RiakUserStatus{Phase: riakv1.UserPhaseFailed},
 		},
 	}
