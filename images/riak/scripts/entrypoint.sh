@@ -143,7 +143,13 @@ trap 'echo "Termination signal received, stopping Riak..."; /usr/sbin/riak stop 
 echo "Waiting for Riak to be ready..."
 RIAK_START_TIMEOUT="${RIAK_START_TIMEOUT:-120}"
 ELAPSED=0
-until /usr/sbin/riak-admin status 2>/dev/null | grep -q 'stats for'; do
+# riak-admin must be pointed at the generated vm.args (see the node-identity note
+# above); the newest file is the one this start just generated.
+riak_admin() {
+    VMARGS_PATH="$(ls -1 /var/lib/riak/generated.conf/vm.*.args 2>/dev/null | tail -1)" \
+        /usr/sbin/riak-admin "$@"
+}
+until riak_admin status 2>/dev/null | grep -q 'stats for'; do
     if ! kill -0 "${RIAK_PID}" 2>/dev/null; then
         echo "ERROR: Riak exited during startup" >&2
         cat /var/log/riak/console.log >&2
