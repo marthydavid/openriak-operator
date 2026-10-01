@@ -36,6 +36,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -69,6 +70,7 @@ type opts struct {
 	mutate      bool
 	deleteEvery int
 
+	ringSize      int
 	verifyWorkers int
 	verifyTimeout time.Duration
 }
@@ -89,6 +91,8 @@ func main() {
 		"enable spec.monitoring (json_exporter sidecar) on every cluster and verify the riak_* metrics on every node")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
+	flag.IntVar(&o.ringSize, "ring-size", minRingSize,
+		"Riak ring_size (a power of two, at least 128). Tiny rings cannot balance: 8 partitions over 3 nodes is 4/2/2")
 	flag.IntVar(&o.verifyWorkers, "verify-workers", 6, "parallel kubectl exec calls while verifying")
 	flag.DurationVar(&o.verifyTimeout, "verify-timeout", 10*time.Minute,
 		"how long verification may retry before reporting mismatches "+
@@ -107,7 +111,14 @@ func main() {
 	}
 }
 
+// minRingSize is the smallest ring the harness will test. Small rings cannot be
+// spread evenly over a few nodes, which makes ring-balance results meaningless.
+const minRingSize = 128
+
 func run(o opts) error {
+	if o.ringSize < minRingSize || o.ringSize&(o.ringSize-1) != 0 {
+		return fmt.Errorf("-ring-size %d: must be a power of two >= %d", o.ringSize, minRingSize)
+	}
 	cfg, err := config.GetConfig()
 	if err != nil {
 		return fmt.Errorf("load kubeconfig: %w", err)
@@ -320,7 +331,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 		spec := riakv1.RiakClusterSpec{
 			Size:       size,
 			Image:      o.image,
-			RiakConfig: map[string]string{"ring_size": "8"},
+			RiakConfig: map[string]string{"ring_size": strconv.Itoa(o.ringSize)},
 		}
 		if o.monitoring {
 			spec.Monitoring = &riakv1.MonitoringConfig{Enabled: true}

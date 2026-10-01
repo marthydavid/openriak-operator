@@ -8,7 +8,7 @@
 #   RIAK_CLUSTER_NAME - injected by operator (equals cluster CR name)
 #   RIAK_NODE         - override full Erlang node name
 #   RIAK_COOKIE       - Erlang distribution cookie (default: riak)
-#   RIAK_RING_SIZE    - number of consistent-hash partitions (default: 64)
+#   RIAK_RING_SIZE    - number of consistent-hash partitions (default: 128)
 #   RIAK_STORAGE_BACKEND - bitcask | leveldb | memory (default: bitcask)
 #   RIAK_CONFIG_*     - arbitrary riak.conf overrides (see below)
 #
@@ -62,7 +62,7 @@ fi
 
 RIAK_NODE="${RIAK_NODE:-${_default_node}}"
 RIAK_COOKIE="${RIAK_COOKIE:-riak}"
-RIAK_RING_SIZE="${RIAK_RING_SIZE:-64}"
+RIAK_RING_SIZE="${RIAK_RING_SIZE:-128}"
 RIAK_STORAGE_BACKEND="${RIAK_STORAGE_BACKEND:-bitcask}"
 
 echo "Starting Riak node: ${RIAK_NODE}"

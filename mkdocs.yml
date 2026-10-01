@@ -41,6 +41,7 @@ nav:
       - RiakUser: crds/riakuser.md
       - RiakBucket: crds/riakbucket.md
   - Examples: examples.md
+  - Release notes: release-notes.md
   - Platform reference:
       - Vanilla Kubernetes: platforms/kubernetes.md
       - OpenShift: platforms/openshift.md
@@ -48,4 +49,5 @@ nav:
       - mTLS with cert-manager: mtls.md
       - Operator configuration: operator-configuration.md
       - Scaling: scaling.md
+      - Scale test results: scale-test-results.md
       - Troubleshooting: troubleshooting.md

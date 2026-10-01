@@ -2,6 +2,7 @@
 
 Guidance for running the operator at fleet scale — dozens of RiakClusters with
 hundreds of RiakUsers and RiakBuckets — plus a load-test harness to measure it.
+Measured results from a real cluster are in [Scale test results](scale-test-results.md).
 
 ## How the operator behaves at scale
 

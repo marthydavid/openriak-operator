@@ -36,7 +36,7 @@ spec:
   storageClassName: standard
   storageSize: 10Gi
   riakConfig:
-    ring_size: "64"
+    ring_size: "128"
     transfer_limit: "2"
 ```
 
