@@ -1,5 +1,25 @@
 # Release notes
 
+## Operator 0.0.9 / chart 0.1.7
+
+Fixes Prometheus scraping: with `spec.monitoring.enabled`, Prometheus showed **0 targets** even
+though the exporter sidecar was running.
+
+### Fixes
+
+- **The ServiceMonitor now selects a Service.** It matches `app=riak,cluster=<name>`, but the
+  operator created its Services without labels, so nothing matched. The client Service now carries
+  those labels. The headless Service stays unlabelled so each pod is scraped only once
+  ([#42](https://github.com/marthydavid/openriak-operator/issues/42)). Existing clusters pick the
+  labels up on the next reconcile after the operator is upgraded; no CRD change is needed.
+
+### Changes you may notice
+
+- The [scale test](scaling.md#verifying-riak-metrics) gained `-monitoring`
+  (`make scale-test MONITORING=true`): it enables monitoring on every cluster and verifies the
+  `riak_*` metrics on every node, and that the ServiceMonitor selects a Service.
+- Releases are now described in a `release` skill (`.claude/skills/release`).
+
 ## Operator 0.0.8 / chart 0.1.6
 
 Multi-node clusters now actually form, and what Riak holds is kept equal to what the custom
