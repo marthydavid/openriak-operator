@@ -18,9 +18,11 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
+	"github.com/go-logr/logr"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -35,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
+	"github.com/marthydavid/openriak-operator/internal/riak"
 )
 
 // reconcileCluster is a helper that creates the reconciler and calls Reconcile.
@@ -515,6 +518,83 @@ var _ = Describe("RiakCluster Controller", func() {
 			Expect(k8sClient.Get(ctx, nn, cluster)).To(Succeed())
 			Expect(cluster.Status.Phase).To(Equal(riakv1.PhaseReady))
 			Expect(cluster.Status.ReadyNodes).To(Equal(int32(1)))
+		})
+	})
+
+	Context("multi-node cluster formation", func() {
+		const clusterName = "formation-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		It("is not Ready until the nodes have joined one ring", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 3, Image: "basho/riak-kv:latest"},
+			})).To(Succeed())
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("creating three Ready pods")
+			for i := 0; i < 3; i++ {
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      fmt.Sprintf("%s-%d", clusterName, i),
+						Namespace: ns,
+						Labels:    map[string]string{"app": "riak", "cluster": clusterName},
+					},
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "riak", Image: "basho/riak-kv:latest"}}},
+				}
+				Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+				pod.Status = corev1.PodStatus{Conditions: []corev1.PodCondition{
+					{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+				}}
+				Expect(k8sClient.Status().Update(ctx, pod)).To(Succeed())
+			}
+
+			node := func(i int) string {
+				return fmt.Sprintf("riak@%s-%d.%s-headless.%s.svc.cluster.local", clusterName, i, clusterName, ns)
+			}
+			row := func(i int) string { return "valid 33.3% -- " + node(i) + "\n" }
+			formed := false
+			runner := func(_ context.Context, _ string, args ...string) (string, error) {
+				joined := strings.Join(args, " ")
+				if !strings.HasSuffix(joined, "member-status") {
+					return "", nil
+				}
+				if formed {
+					return row(0) + row(1) + row(2), nil
+				}
+				for i := 0; i < 3; i++ {
+					if strings.Contains(joined, fmt.Sprintf(" %s-%d ", clusterName, i)) {
+						return row(i), nil // every node is its own ring
+					}
+				}
+				return "", nil
+			}
+			r := &RiakClusterReconciler{
+				Client: k8sClient, Scheme: k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), runner),
+			}
+			reconcileOnce := func() {
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("reconciling while every node is still a standalone ring")
+			reconcileOnce()
+			cluster := &riakv1.RiakCluster{}
+			Expect(k8sClient.Get(ctx, nn, cluster)).To(Succeed())
+			Expect(cluster.Status.ReadyNodes).To(Equal(int32(3)))
+			Expect(cluster.Status.Phase).To(Equal(riakv1.PhaseCreating))
+			Expect(cluster.Status.Conditions).To(ContainElement(
+				HaveField("Reason", "FormingCluster")))
+
+			By("reconciling after the ring has formed")
+			formed = true
+			reconcileOnce()
+			Expect(k8sClient.Get(ctx, nn, cluster)).To(Succeed())
+			Expect(cluster.Status.Phase).To(Equal(riakv1.PhaseReady))
 		})
 	})
 

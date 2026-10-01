@@ -61,6 +61,15 @@ type opts struct {
 	poll      time.Duration
 	keep      bool
 	ephemeral bool
+	replicas  int
+
+	verify      bool
+	verifyOnly  bool
+	mutate      bool
+	deleteEvery int
+
+	verifyWorkers int
+	verifyTimeout time.Duration
 }
 
 func main() {
@@ -74,6 +83,17 @@ func main() {
 	flag.DurationVar(&o.timeout, "timeout", 20*time.Minute, "overall deadline for everything to reach Ready")
 	flag.DurationVar(&o.poll, "poll", 5*time.Second, "status poll interval")
 	flag.BoolVar(&o.keep, "keep", false, "keep resources after the run instead of deleting them")
+	flag.IntVar(&o.replicas, "replicas", 1, "Riak nodes per RiakCluster (spec.size)")
+	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
+	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
+	flag.IntVar(&o.verifyWorkers, "verify-workers", 6, "parallel kubectl exec calls while verifying")
+	flag.DurationVar(&o.verifyTimeout, "verify-timeout", 10*time.Minute,
+		"how long verification may retry before reporting mismatches "+
+			"(the operator reconciles users serially, and Riak metadata gossips)")
+	flag.BoolVar(&o.mutate, "mutate", false,
+		"after verifying, change/remove grants on some users and change n_val/allow_mult on some buckets, then verify again")
+	flag.IntVar(&o.deleteEvery, "delete-users-every", 0,
+		"after verifying, delete every Nth RiakUser and verify again (0 = off)")
 	flag.BoolVar(&o.ephemeral, "ephemeral", false,
 		"use emptyDir (spec.ephemeralStorage) instead of PVCs; for clusters without a storage provisioner")
 	flag.Parse()
@@ -98,6 +118,10 @@ func run(o opts) error {
 		return fmt.Errorf("build client: %w", err)
 	}
 	ctx := context.Background()
+
+	if o.verifyOnly {
+		return verifyEventually(ctx, c, o, "existing state")
+	}
 
 	total := o.clusters + o.clusters*o.users + o.clusters*o.buckets
 	fmt.Printf("Scale test: %d clusters × (%d users + %d buckets) = %d resources in ns/%s\n",
@@ -126,7 +150,75 @@ func run(o opts) error {
 	fmt.Printf("Applied %d resources in %s; waiting for Ready (deadline %s)...\n",
 		total, time.Since(start).Round(time.Millisecond), o.timeout)
 
-	return waitReady(ctx, c, o, start)
+	if err := waitReady(ctx, c, o, start); err != nil {
+		return err
+	}
+	if !o.verify {
+		return nil
+	}
+	if err := verifyEventually(ctx, c, o, "after convergence"); err != nil {
+		return err
+	}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	if o.mutate {
+		n, err := mutateGrants(ctx, c, o, rng)
+		if err != nil {
+			return fmt.Errorf("mutate grants: %w", err)
+		}
+		fmt.Printf("changed or removed the grants of %d users\n", n)
+		nb, err := mutateBuckets(ctx, c, o, rng)
+		if err != nil {
+			return fmt.Errorf("mutate buckets: %w", err)
+		}
+		fmt.Printf("changed the properties of %d buckets\n", nb)
+		if err := waitObserved(ctx, c, o, 5*time.Minute); err != nil {
+			return err
+		}
+		if err := verifyEventually(ctx, c, o, "after changing grants"); err != nil {
+			return err
+		}
+	}
+	if o.deleteEvery > 0 {
+		n, err := deleteUsers(ctx, c, o, o.deleteEvery, 5*time.Minute)
+		if err != nil {
+			return fmt.Errorf("delete users: %w", err)
+		}
+		fmt.Printf("deleted %d RiakUsers\n", n)
+		if err := verifyEventually(ctx, c, o, "after deleting users"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// verifyEventually re-runs verifyAll until Riak matches the CRs or the verify
+// timeout passes: cluster metadata (users, grants, bucket types) gossips between nodes, so a
+// single immediate read can legitimately lag.
+func verifyEventually(ctx context.Context, c client.Client, o opts, stage string) error {
+	fmt.Printf("\n── verifying Riak against the CRs (%s) ──\n", stage)
+	deadline := time.Now().Add(o.verifyTimeout)
+	for {
+		problems, err := verifyAll(ctx, c, o)
+		if err != nil {
+			return err
+		}
+		if len(problems) == 0 {
+			fmt.Println("MATCH: Riak holds exactly what the CRs declare")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			for i, p := range problems {
+				if i == 25 {
+					fmt.Printf("  ... and %d more\n", len(problems)-25)
+					break
+				}
+				fmt.Println("  MISMATCH:", p)
+			}
+			return fmt.Errorf("%d mismatches between Riak and the CRs (%s)", len(problems), stage)
+		}
+		fmt.Printf("  %d mismatches, retrying (gossip may lag)...\n", len(problems))
+		time.Sleep(10 * time.Second)
+	}
 }
 
 func ensureNamespace(ctx context.Context, c client.Client, ns string) error {
@@ -152,10 +244,32 @@ func ensureIssuer(ctx context.Context, c client.Client, ns string) error {
 	return nil
 }
 
-// randomGrants returns 1-4 distinct per-bucket grants with random permissions
-// against the cluster's buckets (bucket-NNN), or a read-any grant when the
-// cluster has no buckets.
-func randomGrants(rng *rand.Rand, buckets int) []riakv1.Grant {
+// randomizeBucketProps gives a bucket a random n_val (1-3, via either typed
+// spelling) and allow_mult (via the typed field or spec.properties), so
+// verification covers every path by which the spec reaches the bucket type.
+func randomizeBucketProps(rng *rand.Rand, spec *riakv1.RiakBucketSpec) {
+	spec.NVal, spec.ReplicationFactor, spec.AllowMulti, spec.Properties = 0, 0, false, nil
+	n := int32(1 + rng.Intn(3))
+	if rng.Intn(2) == 0 {
+		spec.NVal = n
+	} else {
+		spec.ReplicationFactor = n
+	}
+	switch rng.Intn(3) {
+	case 0:
+		spec.AllowMulti = true
+	case 1:
+		spec.Properties = map[string]string{"allow_mult": "false"}
+	default:
+		spec.Properties = map[string]string{"allow_mult": "true"}
+	}
+}
+
+// randomGrants returns 1-4 distinct grants with random permissions against the
+// cluster's real bucket types (<cluster>-tNNN): mostly a whole type, sometimes a
+// bucket inside a type, occasionally `any`. With no buckets it falls back to a
+// read-any grant.
+func randomGrants(rng *rand.Rand, cluster string, buckets int) []riakv1.Grant {
 	if buckets == 0 {
 		return []riakv1.Grant{{Resource: "any", Permission: "read"}}
 	}
@@ -164,12 +278,19 @@ func randomGrants(rng *rand.Rand, buckets int) []riakv1.Grant {
 	seen := map[string]bool{}
 	var grants []riakv1.Grant
 	for len(grants) < n {
-		g := riakv1.Grant{
-			Resource:   "bucket",
-			BucketName: fmt.Sprintf("bucket-%03d", rng.Intn(buckets)),
-			Permission: perms[rng.Intn(len(perms))],
+		g := riakv1.Grant{Permission: perms[rng.Intn(len(perms))]}
+		b := rng.Intn(buckets)
+		switch r := rng.Intn(10); {
+		case r == 0:
+			g.Resource = "any"
+		case r < 3:
+			g.Resource = "bucket"
+			g.BucketName = fmt.Sprintf("%s-t%03d bucket-%03d", cluster, b, b)
+		default:
+			g.Resource = "bucket"
+			g.BucketName = fmt.Sprintf("%s-t%03d", cluster, b)
 		}
-		if k := g.BucketName + "/" + g.Permission; !seen[k] {
+		if k := grantKey(g) + "/" + g.Permission; !seen[k] {
 			seen[k] = true
 			grants = append(grants, g)
 		}
@@ -181,7 +302,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for i := 0; i < o.clusters; i++ {
 		cl := fmt.Sprintf("scale-c%03d", i)
-		size := int32(1)
+		size := int32(o.replicas)
 		spec := riakv1.RiakClusterSpec{
 			Size:       size,
 			Image:      o.image,
@@ -208,7 +329,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 					CertificateRef: &riakv1.UserCertificateRef{
 						IssuerRef: riakv1.CertIssuerRef{Name: "scale-issuer", Kind: "Issuer"},
 					},
-					Grants: randomGrants(rng, o.buckets),
+					Grants: randomGrants(rng, cl, o.buckets),
 				},
 			}
 			if err := c.Create(ctx, user); err != nil && !apiAlreadyExists(err) {
@@ -224,6 +345,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 					BucketType:  fmt.Sprintf("%s-t%03d", cl, b),
 				},
 			}
+			randomizeBucketProps(rng, &bucket.Spec)
 			if err := c.Create(ctx, bucket); err != nil && !apiAlreadyExists(err) {
 				return fmt.Errorf("create bucket: %w", err)
 			}

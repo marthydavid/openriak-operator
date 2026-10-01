@@ -272,6 +272,13 @@ status:
       message: bucket type "default" is active on cluster my-cluster
 ```
 
+Edits are applied to Riak: a bucket type that already exists (including Riak's built-in `default`
+type) is updated with `riak-admin bucket-type update`, so changing `nVal`, `allowMulti` or
+`properties` changes the live type. Riak rejects some changes (for example `consistent` or
+`datatype` on an existing type); the bucket then goes `Failed` with Riak's reason in
+`status.error`. Changing `n_val` on a type that already holds data is allowed by Riak but leaves
+existing objects under-/over-replicated until read repair or AAE catches up.
+
 ### RiakUser
 
 Creates users and grants permissions in a Riak cluster.
@@ -380,7 +387,10 @@ minimal, dependency-free reference client that performs a STARTTLS write/read is
 
 > **Note:** grant `permission` values (`read`/`write`/`delete`/`list`/`admin`) map to Riak KV
 > permissions (`riak_kv.get`, `riak_kv.put`, …). A grant with `resource: bucket` applies to the
-> named bucket **type**.
+> named bucket **type** (`bucketName: mytype`) or one bucket in it (`bucketName: "mytype mybucket"`).
+>
+> `spec.grants` is reconciled, not just applied: permissions removed from the spec are revoked in
+> Riak, and deleting a RiakUser deletes the Riak user (with its grants and certificate source).
 
 ## Monitoring and Troubleshooting
 

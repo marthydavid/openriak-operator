@@ -53,6 +53,38 @@ type RiakUserReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
+// userDeleteGracePeriod bounds how long a RiakUser deletion waits for the Riak
+// side cleanup before giving up, so an unreachable cluster can never wedge
+// deletion (and with it the namespace) forever.
+const userDeleteGracePeriod = 2 * time.Minute
+
+// deleteRiakUser removes the user from Riak so a deleted RiakUser does not leave
+// a working identity behind. It is best effort where the cluster cannot be
+// asked: a missing, deleting or not-Ready cluster has nothing to clean up (or no
+// way to), and after userDeleteGracePeriod it gives up rather than block.
+func (r *RiakUserReconciler) deleteRiakUser(ctx context.Context, user *riakv1.RiakUser) error {
+	if !user.Status.Created {
+		return nil // never provisioned in Riak
+	}
+	cluster := &riakv1.RiakCluster{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: user.Namespace, Name: user.Spec.ClusterName}, cluster); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !cluster.DeletionTimestamp.IsZero() || cluster.Status.Phase != riakv1.PhaseReady || len(cluster.Status.Members) == 0 {
+		return nil
+	}
+	executor := r.Executor
+	if executor == nil {
+		executor = riak.NewExecutor(log.FromContext(ctx))
+	}
+	err := riak.NewManager(executor, r.Client, log.FromContext(ctx)).DeleteUser(ctx, cluster, user.Spec.Username)
+	if err != nil && time.Since(user.DeletionTimestamp.Time) > userDeleteGracePeriod {
+		log.FromContext(ctx).Error(err, "giving up deleting Riak user", "user", user.Spec.Username)
+		return nil
+	}
+	return err
+}
+
 // Reconcile creates and manages Riak users in a cluster.
 func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
@@ -65,6 +97,10 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Handle deletion
 	if !user.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(user, riakUserFinalizerName) {
+			if err := r.deleteRiakUser(ctx, user); err != nil {
+				log.Error(err, "failed to delete Riak user; will retry", "user", user.Spec.Username)
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			}
 			controllerutil.RemoveFinalizer(user, riakUserFinalizerName)
 			if err := r.Update(ctx, user); err != nil {
 				return ctrl.Result{}, err

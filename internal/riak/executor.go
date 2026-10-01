@@ -53,6 +53,12 @@ func (e *Executor) ExecuteRiakAdmin(ctx context.Context, namespace, podName, con
 		podName,
 		"-c", containerName,
 		"--",
+		// riak-admin calls the release's `riak` script directly, which falls back to
+		// the default vm.args (-sname riak) and so addresses the node as
+		// riak@<short hostname>. Point it at the generated vm.args the node was
+		// started with so it finds the node under its real (FQDN) name.
+		"sh", "-c",
+		"VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args 2>/dev/null | tail -1) exec riak-admin \"$@\"",
 		"riak-admin",
 	}
 	cmdArgs = append(cmdArgs, args...)
@@ -65,7 +71,54 @@ func (e *Executor) ExecuteRiakAdmin(ctx context.Context, namespace, podName, con
 		e.log.Error(err, "riak-admin command failed", "pod", podName, "args", args)
 		return "", fmt.Errorf("riak-admin failed: %w", err)
 	}
+	if riakAdminFailed(out) {
+		err := fmt.Errorf("riak-admin %s failed: %s", strings.Join(subcommand(args), " "), compactOutput(out))
+		// Logged at debug level: idempotent callers expect and tolerate some of
+		// these replies (role_exists, already_active, ...), and callers that
+		// fail on it log the error themselves.
+		e.log.V(1).Info("riak-admin reported an error", "pod", podName, "args", args, "reply", compactOutput(out))
+		return out, err
+	}
 	return out, nil
+}
+
+// riakAdminFailed reports whether riak-admin output signals a failure.
+// riak-admin exits 0 even when the command fails: the node's reply is printed
+// instead, either as a bare "error" on the last line (bucket-type commands) or
+// as an {error,Reason} term (security commands). Without this check every
+// failed command would look like a success.
+func riakAdminFailed(out string) bool {
+	last := ""
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "{error,") {
+			return true
+		}
+		last = line
+	}
+	return last == "error"
+}
+
+// subcommand returns the riak-admin subcommand words (e.g. "bucket-type create")
+// for error messages, without arguments that may be long JSON documents.
+func subcommand(args []string) []string {
+	if len(args) > 2 {
+		return args[:2]
+	}
+	return args
+}
+
+// compactOutput folds riak-admin output onto one line, capped, for an error message.
+func compactOutput(out string) string {
+	s := strings.Join(strings.Fields(out), " ")
+	const maxLen = 300
+	if len(s) > maxLen {
+		s = s[:maxLen] + "..."
+	}
+	return s
 }
 
 // GetClusterMembers retrieves the list of cluster members from a node.
@@ -89,6 +142,50 @@ func (e *Executor) GetClusterMembers(ctx context.Context, namespace, podName, co
 	return members, nil
 }
 
+// memberStatusValid is the member-status state of a node that is a settled ring member.
+const memberStatusValid = "valid"
+
+// ClusterMember is one row of `riak-admin member-status`.
+type ClusterMember struct {
+	Status string // valid, joining, leaving, exiting, down
+	Node   string // Erlang node name, e.g. riak@pod-0.svc.ns.svc.cluster.local
+}
+
+// MemberStatus returns the members of the ring as seen from podName. A node
+// that has not joined a cluster yet reports a ring containing only itself.
+func (e *Executor) MemberStatus(ctx context.Context, namespace, podName, containerName string) ([]ClusterMember, error) {
+	out, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "member-status")
+	if err != nil {
+		return nil, err
+	}
+	return parseMemberStatus(out), nil
+}
+
+// parseMemberStatus extracts the rows of the member-status table:
+//
+//	valid     100.0%      --      riak@node-0
+func parseMemberStatus(output string) []ClusterMember {
+	var members []ClusterMember
+	for _, line := range strings.Split(output, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 4 || !strings.HasPrefix(f[3], "riak@") {
+			continue
+		}
+		switch f[0] {
+		case memberStatusValid, "joining", "leaving", "exiting", "down":
+			members = append(members, ClusterMember{Status: f[0], Node: f[3]})
+		}
+	}
+	return members
+}
+
+// JoinCluster stages a join of podName's node into the ring that contains
+// targetNode. riak-admin must run on the joining node.
+func (e *Executor) JoinCluster(ctx context.Context, namespace, podName, containerName, targetNode string) error {
+	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "cluster", "join", targetNode)
+	return err
+}
+
 // PlanCluster stages a cluster membership change.
 func (e *Executor) PlanCluster(ctx context.Context, namespace, podName, containerName, action string) (string, error) {
 	return e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "cluster", action)
@@ -104,7 +201,11 @@ func (e *Executor) GetStatus(ctx context.Context, namespace, podName, containerN
 	return e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "status")
 }
 
-// CreateBucket creates a bucket type with the given properties.
+// CreateBucket makes a bucket type exist, be active, and carry the given
+// properties. A type that is already active cannot be re-created, so its
+// properties are applied with `bucket-type update` instead: without that, an
+// edited RiakBucket would never reach Riak. Riak's built-in "default" type can
+// only be updated, never created or activated.
 // Riak requires JSON: riak-admin bucket-type create <type> '{"props":{"n_val":3}}'
 // String values that parse as a JSON literal (number, bool) are sent as their native type.
 func (e *Executor) CreateBucket(ctx context.Context, namespace, podName, containerName, bucketType, _ string, properties map[string]string) error {
@@ -124,16 +225,23 @@ func (e *Executor) CreateBucket(ctx context.Context, namespace, podName, contain
 	}
 
 	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "bucket-type", "create", bucketType, string(propsJSON))
-	if err != nil && !strings.Contains(err.Error(), "already") {
+	switch {
+	case err == nil:
+		// New (or created but never activated, which create overwrites): activate it.
+		_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "bucket-type", "activate", bucketType)
+		if err != nil && !strings.Contains(err.Error(), "already") {
+			return err
+		}
+		return nil
+	case strings.Contains(err.Error(), "already_active"), strings.Contains(err.Error(), "default_type"):
+		if len(props) == 0 {
+			return nil
+		}
+		_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "bucket-type", "update", bucketType, string(propsJSON))
+		return err
+	default:
 		return err
 	}
-
-	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "bucket-type", "activate", bucketType)
-	if err != nil && !strings.Contains(err.Error(), "already") {
-		return err
-	}
-
-	return nil
 }
 
 // CreateUserForCert creates a Riak user without a password for certificate-based authentication.
@@ -143,6 +251,9 @@ func (e *Executor) CreateUserForCert(ctx context.Context, namespace, podName, co
 	// Security must already be enabled on the cluster (see EnableSecurity); it is
 	// enabled once per cluster rather than here, per user.
 	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "add-user", username)
+	if err != nil && strings.Contains(err.Error(), "role_exists") {
+		return nil // reconciles re-run this; an existing user is the goal
+	}
 	return err
 }
 
@@ -189,6 +300,9 @@ func riakKVPermissions(permission string) string {
 	}
 }
 
+// resourceAny is the CRD grant resource (and riak-admin target) for every bucket.
+const resourceAny = "any"
+
 // GrantPermission grants a permission to a user on a resource.
 //
 // Riak's grant syntax is:
@@ -210,24 +324,64 @@ func (e *Executor) GrantPermission(ctx context.Context, namespace, podName, cont
 // are de-duplicated with a stable order so the pod template / command is
 // deterministic.
 func (e *Executor) GrantPermissions(ctx context.Context, namespace, podName, containerName, username, resource, bucket string, permissions []string) error {
-	// Resolve the grant target. A "bucket" resource with an empty bucket must
-	// NOT fall through to "on any" — that would silently grant cluster-wide
-	// access. Reject it, and reject unknown resources, instead.
-	var target []string
+	target, err := grantTarget(resource, bucket)
+	if err != nil {
+		return err
+	}
+	args := []string{"security", "grant", strings.Join(permissionTokens(permissions), ","), "on"}
+	args = append(args, target...)
+	args = append(args, "to", username)
+	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
+	return err
+}
+
+// RevokePermissions removes permissions from a user on a grant target, the
+// inverse of GrantPermissions.
+func (e *Executor) RevokePermissions(ctx context.Context, namespace, podName, containerName, username, resource, bucket string, tokens []string) error {
+	target, err := grantTarget(resource, bucket)
+	if err != nil {
+		return err
+	}
+	args := []string{"security", "revoke", strings.Join(tokens, ","), "on"}
+	args = append(args, target...)
+	args = append(args, "from", username)
+	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
+	return err
+}
+
+// DeleteUser removes a Riak user together with its grants and sources. A user
+// Riak does not know is already deleted.
+func (e *Executor) DeleteUser(ctx context.Context, namespace, podName, containerName, username string) error {
+	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "del-user", username)
+	if err != nil && strings.Contains(err.Error(), "unknown_user") {
+		return nil
+	}
+	return err
+}
+
+// grantTarget resolves the `on ...` target of a grant. A "bucket" resource with an
+// empty bucket must NOT fall through to "on any" — that would silently grant
+// cluster-wide access. Reject it, and reject unknown resources, instead.
+func grantTarget(resource, bucket string) ([]string, error) {
 	switch resource {
-	case "any":
-		target = []string{"any"}
+	case resourceAny:
+		return []string{resourceAny}, nil
 	case "bucket":
 		// strings.Fields also collapses a whitespace-only bucket to an empty
 		// target, so validate the parsed result rather than the raw string.
-		target = strings.Fields(bucket)
+		target := strings.Fields(bucket)
 		if len(target) == 0 {
-			return fmt.Errorf("bucket grant requires a bucket target")
+			return nil, fmt.Errorf("bucket grant requires a bucket target")
 		}
+		return target, nil
 	default:
-		return fmt.Errorf("unknown grant resource %q", resource)
+		return nil, fmt.Errorf("unknown grant resource %q", resource)
 	}
+}
 
+// permissionTokens expands CRD permissions into the distinct riak_kv permission
+// tokens they stand for, in first-seen order.
+func permissionTokens(permissions []string) []string {
 	seen := map[string]bool{}
 	var tokens []string
 	for _, p := range permissions {
@@ -238,10 +392,61 @@ func (e *Executor) GrantPermissions(ctx context.Context, namespace, podName, con
 			}
 		}
 	}
+	return tokens
+}
 
-	args := []string{"security", "grant", strings.Join(tokens, ","), "on"}
-	args = append(args, target...)
-	args = append(args, "to", username)
-	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
-	return err
+// GrantEntry is one row of a user's dedicated permissions as Riak reports them.
+type GrantEntry struct {
+	Type   string // bucket type, or "*" for `on any`
+	Bucket string // bucket, or "*" for the whole type
+	Tokens []string
+}
+
+// GetUserGrants returns the user's dedicated (directly granted) permissions.
+func (e *Executor) GetUserGrants(ctx context.Context, namespace, podName, containerName, username string) ([]GrantEntry, error) {
+	out, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "print-grants", username)
+	if err != nil {
+		return nil, err
+	}
+	return parseDedicatedGrants(out), nil
+}
+
+// parseDedicatedGrants reads the "Dedicated permissions" table of print-grants.
+// Long permission lists wrap onto continuation rows with an empty type column.
+func parseDedicatedGrants(output string) []GrantEntry {
+	lines := strings.Split(output, "\n")
+	entries := make([]GrantEntry, 0, len(lines))
+	inSection := false
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "Dedicated permissions"):
+			inSection = true
+			continue
+		case strings.HasPrefix(line, "Cumulative permissions"):
+			return entries
+		case !inSection || !strings.HasPrefix(line, "|"):
+			continue
+		}
+		cols := strings.Split(strings.Trim(line, "|"), "|")
+		if len(cols) != 3 {
+			continue
+		}
+		typ, bucket := strings.TrimSpace(cols[0]), strings.TrimSpace(cols[1])
+		if typ == "type" { // header row
+			continue
+		}
+		var tokens []string
+		for _, t := range strings.Split(cols[2], ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tokens = append(tokens, t)
+			}
+		}
+		if typ == "" && len(entries) > 0 { // continuation of the previous row
+			last := &entries[len(entries)-1]
+			last.Tokens = append(last.Tokens, tokens...)
+			continue
+		}
+		entries = append(entries, GrantEntry{Type: typ, Bucket: bucket, Tokens: tokens})
+	}
+	return entries
 }
