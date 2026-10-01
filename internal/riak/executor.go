@@ -297,6 +297,9 @@ func riakKVPermissions(permission string) string {
 	}
 }
 
+// resourceAny is the CRD grant resource (and riak-admin target) for every bucket.
+const resourceAny = "any"
+
 // GrantPermission grants a permission to a user on a resource.
 //
 // Riak's grant syntax is:
@@ -358,8 +361,8 @@ func (e *Executor) DeleteUser(ctx context.Context, namespace, podName, container
 // cluster-wide access. Reject it, and reject unknown resources, instead.
 func grantTarget(resource, bucket string) ([]string, error) {
 	switch resource {
-	case "any":
-		return []string{"any"}, nil
+	case resourceAny:
+		return []string{resourceAny}, nil
 	case "bucket":
 		// strings.Fields also collapses a whitespace-only bucket to an empty
 		// target, so validate the parsed result rather than the raw string.
@@ -408,9 +411,10 @@ func (e *Executor) GetUserGrants(ctx context.Context, namespace, podName, contai
 // parseDedicatedGrants reads the "Dedicated permissions" table of print-grants.
 // Long permission lists wrap onto continuation rows with an empty type column.
 func parseDedicatedGrants(output string) []GrantEntry {
-	var entries []GrantEntry
+	lines := strings.Split(output, "\n")
+	entries := make([]GrantEntry, 0, len(lines))
 	inSection := false
-	for _, line := range strings.Split(output, "\n") {
+	for _, line := range lines {
 		switch {
 		case strings.HasPrefix(line, "Dedicated permissions"):
 			inSection = true

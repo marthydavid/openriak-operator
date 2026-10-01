@@ -87,7 +87,36 @@ go run ./test/scale -clusters 10 -users 10 -buckets 10 -keep
 ```
 
 Flags: `-clusters`, `-users` (per cluster), `-buckets` (per cluster),
-`-namespace`, `-image`, `-storage-class`, `-timeout`, `-poll`, `-keep`.
+`-replicas` (Riak nodes per cluster, `spec.size`), `-namespace`, `-image`,
+`-storage-class`, `-ephemeral`, `-timeout`, `-poll`, `-keep`.
+
+### Verifying Riak against the CRs
+
+`Ready` only says the operator *thinks* it is done. With `-verify` (on by
+default) the harness then reads Riak itself, on **every node** of every
+cluster, and diffs it against the CRs: ring membership (`Valid:<size>`, nothing
+joining/leaving/down), every RiakBucket's type is active and carries the
+spec's `n_val` / `allow_mult` / `properties`, every RiakUser exists with a
+`certificate` source, no Riak user exists without a RiakUser, and each user's
+grants are **exactly** the spec (missing and extra permissions both count). It
+maps CRD permissions to Riak tokens with its own table rather than the
+operator's, so an operator mapping bug cannot hide itself. Metadata gossips, so
+it retries for `-verify-timeout` (default 10m) before printing `MISMATCH:` lines;
+success prints `MATCH: Riak holds exactly what the CRs declare`.
+
+| Flag | Effect |
+|------|--------|
+| `-verify` | verify after convergence (default `true`) |
+| `-verify-only` | verify an existing namespace; create nothing |
+| `-mutate` | then re-randomise or drop the grants of every 3rd user and change `n_val`/`allow_mult` of every 3rd bucket, wait until the operator observed the new generations, verify again |
+| `-delete-users-every N` | then delete every Nth RiakUser and verify the Riak users are gone too |
+| `-verify-workers` | parallel `kubectl exec` calls while verifying (default 6) |
+| `-verify-timeout` | how long verification retries before reporting mismatches |
+
+```bash
+go run ./test/scale -clusters 3 -users 20 -buckets 20 -replicas 3 \
+  -storage-class lvms-vg1 -mutate -delete-users-every 4 -timeout 30m
+```
 
 It prints a live phase count and a summary: per-kind convergence time and
 throughput (resources/second), total wall clock, and any resources stuck in

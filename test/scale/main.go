@@ -88,10 +88,12 @@ func main() {
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
 	flag.IntVar(&o.verifyWorkers, "verify-workers", 6, "parallel kubectl exec calls while verifying")
 	flag.DurationVar(&o.verifyTimeout, "verify-timeout", 10*time.Minute,
-		"how long verification may retry before reporting mismatches (the operator reconciles users serially, and Riak metadata gossips)")
+		"how long verification may retry before reporting mismatches "+
+			"(the operator reconciles users serially, and Riak metadata gossips)")
 	flag.BoolVar(&o.mutate, "mutate", false,
 		"after verifying, change/remove grants on some users and change n_val/allow_mult on some buckets, then verify again")
-	flag.IntVar(&o.deleteEvery, "delete-users-every", 0, "after verifying, delete every Nth RiakUser and verify again (0 = off)")
+	flag.IntVar(&o.deleteEvery, "delete-users-every", 0,
+		"after verifying, delete every Nth RiakUser and verify again (0 = off)")
 	flag.BoolVar(&o.ephemeral, "ephemeral", false,
 		"use emptyDir (spec.ephemeralStorage) instead of PVCs; for clusters without a storage provisioner")
 	flag.Parse()
@@ -164,6 +166,11 @@ func run(o opts) error {
 			return fmt.Errorf("mutate grants: %w", err)
 		}
 		fmt.Printf("changed or removed the grants of %d users\n", n)
+		nb, err := mutateBuckets(ctx, c, o, rng)
+		if err != nil {
+			return fmt.Errorf("mutate buckets: %w", err)
+		}
+		fmt.Printf("changed the properties of %d buckets\n", nb)
 		if err := waitObserved(ctx, c, o, 5*time.Minute); err != nil {
 			return err
 		}

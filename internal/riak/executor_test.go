@@ -269,6 +269,8 @@ const (
 	outCreateAlreadyActive = "Error creating bucket type t1:\nalready_active\nerror"
 	outCreateDefaultType   = "Error creating bucket type default:\ndefault_type\nerror"
 	outUpdated             = "t1 updated\nok"
+	cmdCreate              = "create"
+	cmdUpdate              = "update"
 )
 
 // bucketTypeRunner answers each bucket-type subcommand with a fixed output and
@@ -288,24 +290,24 @@ func bucketTypeRunner(outputs map[string]string, ran *[]string) func(context.Con
 func TestCreateBucket_updatesAnActiveType(t *testing.T) {
 	var ran []string
 	e := newTestExecutor(bucketTypeRunner(map[string]string{
-		"create": outCreateAlreadyActive, "update": outUpdated}, &ran))
+		cmdCreate: outCreateAlreadyActive, cmdUpdate: outUpdated}, &ran))
 
 	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", map[string]string{"n_val": "2"}); err != nil {
 		t.Fatalf("expected the existing type to be updated, got: %v", err)
 	}
-	if strings.Join(ran, ",") != "create,update" {
+	if strings.Join(ran, ",") != cmdCreate+",update" {
 		t.Errorf("expected create then update, got %v", ran)
 	}
 }
 
 func TestCreateBucket_activeTypeWithoutPropsIsDone(t *testing.T) {
 	var ran []string
-	e := newTestExecutor(bucketTypeRunner(map[string]string{"create": outCreateAlreadyActive}, &ran))
+	e := newTestExecutor(bucketTypeRunner(map[string]string{cmdCreate: outCreateAlreadyActive}, &ran))
 
 	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Join(ran, ",") != "create" {
+	if strings.Join(ran, ",") != cmdCreate {
 		t.Errorf("expected only create, got %v", ran)
 	}
 }
@@ -313,12 +315,12 @@ func TestCreateBucket_activeTypeWithoutPropsIsDone(t *testing.T) {
 func TestCreateBucket_defaultTypeIsUpdated(t *testing.T) {
 	var ran []string
 	e := newTestExecutor(bucketTypeRunner(map[string]string{
-		"create": outCreateDefaultType, "update": outUpdated}, &ran))
+		cmdCreate: outCreateDefaultType, cmdUpdate: outUpdated}, &ran))
 
 	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "default", "", map[string]string{"allow_mult": "true"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Join(ran, ",") != "create,update" {
+	if strings.Join(ran, ",") != cmdCreate+",update" {
 		t.Errorf("expected create then update, got %v", ran)
 	}
 }
@@ -326,8 +328,8 @@ func TestCreateBucket_defaultTypeIsUpdated(t *testing.T) {
 func TestCreateBucket_returnsUpdateError(t *testing.T) {
 	var ran []string
 	e := newTestExecutor(bucketTypeRunner(map[string]string{
-		"create": outCreateAlreadyActive,
-		"update": "Error updating bucket type t1:\nWrite once buckets must not be consistent=true\nerror"}, &ran))
+		cmdCreate: outCreateAlreadyActive,
+		cmdUpdate: "Error updating bucket type t1:\nWrite once buckets must not be consistent=true\nerror"}, &ran))
 
 	err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", map[string]string{"consistent": "true"})
 	if err == nil || !strings.Contains(err.Error(), "consistent=true") {
@@ -338,12 +340,12 @@ func TestCreateBucket_returnsUpdateError(t *testing.T) {
 func TestCreateBucket_returnsRejectedCreate(t *testing.T) {
 	var ran []string
 	e := newTestExecutor(bucketTypeRunner(map[string]string{
-		"create": "Cannot create bucket type t1: invalid json\nerror"}, &ran))
+		cmdCreate: "Cannot create bucket type t1: invalid json\nerror"}, &ran))
 
 	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", nil); err == nil {
 		t.Fatal("expected a create rejected by Riak to be an error")
 	}
-	if strings.Join(ran, ",") != "create" {
+	if strings.Join(ran, ",") != cmdCreate {
 		t.Errorf("activate must not run after a failed create, got %v", ran)
 	}
 }
@@ -351,12 +353,12 @@ func TestCreateBucket_returnsRejectedCreate(t *testing.T) {
 func TestCreateBucket_activateAlreadyActiveIsOK(t *testing.T) {
 	var ran []string
 	e := newTestExecutor(bucketTypeRunner(map[string]string{
-		"create": "t1 created\nok", "activate": "t1 has been activated\nok"}, &ran))
+		cmdCreate: "t1 created\nok", "activate": "t1 has been activated\nok"}, &ran))
 
 	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Join(ran, ",") != "create,activate" {
+	if strings.Join(ran, ",") != cmdCreate+",activate" {
 		t.Errorf("expected create then activate, got %v", ran)
 	}
 }

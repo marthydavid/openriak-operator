@@ -35,13 +35,15 @@ import (
 
 // riakAdminScript points riak-admin at the generated vm.args, the way the
 // operator does; without it the tool cannot find a node with a FQDN name.
-const riakAdminScript = `VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args 2>/dev/null | tail -1) exec riak-admin "$@"`
+const riakAdminScript = `VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args 2>/dev/null | tail -1) ` +
+	`exec riak-admin "$@"`
 
 // riakAdmin runs riak-admin inside a Riak pod and returns its output.
 func riakAdmin(ns, pod string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	cmdArgs := append([]string{"exec", "-n", ns, pod, "-c", "riak", "--", "sh", "-c", riakAdminScript, "riak-admin"}, args...)
+	cmdArgs := append([]string{"exec", "-n", ns, pod, "-c", "riak", "--",
+		"sh", "-c", riakAdminScript, "riak-admin"}, args...)
 	out, err := exec.CommandContext(ctx, "kubectl", cmdArgs...).CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("kubectl exec %s riak-admin %s: %w", pod, strings.Join(args, " "), err)
@@ -91,8 +93,9 @@ func expectedGrants(grants []riakv1.Grant) map[string]map[string]bool {
 // tableRows splits a riak-admin ASCII table into trimmed cell rows, skipping
 // separators.
 func tableRows(section string) [][]string {
-	var rows [][]string
-	for _, line := range strings.Split(section, "\n") {
+	lines := strings.Split(section, "\n")
+	rows := make([][]string, 0, len(lines))
+	for _, line := range lines {
 		if !strings.HasPrefix(line, "|") {
 			continue
 		}
@@ -494,7 +497,7 @@ func deleteUsers(ctx context.Context, c client.Client, o opts, every int, timeou
 		return 0, err
 	}
 	sort.Slice(users.Items, func(i, j int) bool { return users.Items[i].Name < users.Items[j].Name })
-	var gone []string
+	gone := make([]string, 0, len(users.Items)/every+1)
 	for i := range users.Items {
 		if i%every != 0 {
 			continue

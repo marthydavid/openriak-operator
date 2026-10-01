@@ -158,7 +158,15 @@ spec:
    then creates the user (`riak-admin security add-user`).
 3. Registers the certificate source
    (`riak-admin security add-source <username> 0.0.0.0/0 certificate`).
-4. Applies `spec.grants`.
+4. Makes the user's Riak grants equal `spec.grants`: it grants everything the
+   spec lists, then reads `riak-admin security print-grants` and revokes any
+   permission the spec no longer lists. Removing a grant from the RiakUser
+   removes the access in Riak; an empty `grants` list revokes all of them.
+
+Deleting a RiakUser runs `riak-admin security del-user`, which removes the user
+together with its grants and certificate source. This is best effort: it is
+skipped when the cluster is missing, being deleted or not Ready, and given up
+after two minutes of failures so the RiakUser never gets stuck.
 
 cert-manager writes the issued certificate to the secret (default
 `<riakuser-name>-client-tls`) containing `tls.crt`, `tls.key`, and `ca.crt`.

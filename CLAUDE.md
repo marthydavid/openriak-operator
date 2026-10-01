@@ -105,7 +105,24 @@ riak-admin bucket-type create mytype '{"props":{"n_val":3}}'
 ```
 
 The executor's `CreateBucket` method handles this serialisation. String values that parse as a
-JSON literal (number, bool) are sent as their native type.
+JSON literal (number, bool) are sent as their native type. An already-active type (or Riak's
+built-in `default`) cannot be created, so `CreateBucket` falls back to `bucket-type update`.
+
+**riak-admin exits 0 when a command fails.** Riak's reply is printed instead: a trailing
+`error` line (bucket-type commands) or an `{error,Reason}` term (security commands).
+`ExecuteRiakAdmin` turns such replies into an error carrying the reason (`riakAdminFailed`);
+idempotent callers match the specific reason they tolerate (`role_exists` for add-user,
+`unknown_user` for del-user, `already_active`/`default_type` for bucket-type create). Test mocks
+should return real riak-admin output rather than a Go error to exercise this path.
+
+### Reconciled Riak state
+
+- `spec.grants` is reconciled: `GrantUserPermissions` grants the spec, reads `print-grants`, and
+  revokes anything not in the spec (empty spec revokes all).
+- Deleting a RiakUser runs `security del-user` (best effort; skipped when the cluster is
+  missing/deleting/not Ready; gives up after `userDeleteGracePeriod`).
+- `test/scale` verifies Riak against the CRs on every node (`-verify`, `-verify-only`, `-mutate`,
+  `-delete-users-every`); see `docs/scaling.md`.
 
 ## Container Images
 

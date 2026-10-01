@@ -135,7 +135,7 @@ func grantKey(resource, bucket string) (string, error) {
 		return "", err
 	}
 	switch {
-	case target[0] == "any":
+	case target[0] == resourceAny:
 		return "* *", nil
 	case len(target) == 1:
 		return target[0] + " *", nil
@@ -202,7 +202,7 @@ func (m *Manager) GrantUserPermissions(ctx context.Context, cluster *riakv1.Riak
 		resource, bucket := "bucket", entry.Type
 		switch {
 		case entry.Type == "*":
-			resource, bucket = "any", ""
+			resource, bucket = resourceAny, ""
 		case entry.Bucket != "*":
 			bucket = entry.Type + " " + entry.Bucket
 		}
