@@ -239,7 +239,7 @@ func ringSizeOf(cl riakv1.RiakCluster) int {
 func ringImbalance(memberStatus string, nodes, ringSize int) string {
 	lo, hi := ringSize/nodes, (ringSize+nodes-1)/nodes
 	tol := 0.06 // member-status prints one decimal of a percentage
-	var owned []string
+	owned := make([]string, 0, nodes)
 	bad := false
 	rows := 0
 	for _, cells := range tableRows(memberStatus) {
