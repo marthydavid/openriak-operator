@@ -224,6 +224,52 @@ func parseBucketTypeStatus(out string) map[string]string {
 	return props
 }
 
+// ringSizeOf is the cluster's configured number of partitions (the harness minimum
+// when the spec does not set ring_size).
+func ringSizeOf(cl riakv1.RiakCluster) int {
+	if v, err := strconv.Atoi(cl.Spec.RiakConfig["ring_size"]); err == nil && v > 0 {
+		return v
+	}
+	return minRingSize
+}
+
+// ringImbalance returns a description when the partitions are not spread as
+// evenly as the ring size allows: every node must own either floor or ceil of
+// ringSize/nodes partitions. It returns "" when the ring is balanced.
+func ringImbalance(memberStatus string, nodes, ringSize int) string {
+	lo, hi := ringSize/nodes, (ringSize+nodes-1)/nodes
+	tol := 0.06 // member-status prints one decimal of a percentage
+	owned := make([]string, 0, nodes)
+	bad := false
+	rows := 0
+	// member-status rows are whitespace separated, not a boxed table:
+	//   valid      33.6%      --      riak@node-0.svc
+	for _, line := range strings.Split(memberStatus, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 4 || !strings.HasPrefix(f[3], "riak@") {
+			continue
+		}
+		pct, err := strconv.ParseFloat(strings.TrimSuffix(f[1], "%"), 64)
+		if err != nil {
+			continue
+		}
+		rows++
+		parts := pct / 100 * float64(ringSize)
+		owned = append(owned, fmt.Sprintf("%s=%.1f%% (~%.1f partitions)", f[3], pct, parts))
+		if parts < float64(lo)-tol*float64(ringSize)/100 || parts > float64(hi)+tol*float64(ringSize)/100 {
+			bad = true
+		}
+	}
+	if rows != nodes {
+		return fmt.Sprintf("member-status lists %d nodes, want %d", rows, nodes)
+	}
+	if bad {
+		return fmt.Sprintf("ring of %d partitions is unbalanced across %d nodes (each should own %d-%d): %s",
+			ringSize, nodes, lo, hi, strings.Join(owned, ", "))
+	}
+	return ""
+}
+
 func diffGrants(want, got map[string]map[string]bool) []string {
 	var d []string
 	for k, wt := range want {
@@ -309,6 +355,10 @@ func verifyAll(ctx context.Context, c client.Client, o opts) ([]string, error) {
 				want := fmt.Sprintf("Valid:%d / Leaving:0 / Exiting:0 / Joining:0 / Down:0", cl.Spec.Size)
 				if !strings.Contains(out, want) {
 					fail("%s: ring is not %q\n%s", pod, want, out)
+				}
+				count()
+				if msg := ringImbalance(out, int(cl.Spec.Size), ringSizeOf(cl)); msg != "" {
+					fail("%s: %s", pod, msg)
 				}
 			})
 			run(func() { // bucket types

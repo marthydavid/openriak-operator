@@ -153,7 +153,7 @@ spec:
 
   # Riak configuration (riak.conf settings)
   riakConfig:
-    "ring_size": "64"
+    "ring_size": "128"
     "transfer_limit": "2"
     "handoff_port": "8099"
 

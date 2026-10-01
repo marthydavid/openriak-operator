@@ -216,3 +216,11 @@ Every controller follows this order in Reconcile:
   `tlsStatus`, pod container statuses plus the ServiceMonitor for `monitoringStatus`, and the
   namespace's RiakBuckets/RiakUsers for `buckets`/`users`. Lists are sorted by name so the status
   does not churn on map/list ordering.
+
+## Ring size
+
+Use `ring_size` >= 128 (a power of two). A ring is split into whole partitions, so a small ring
+cannot be balanced across a few nodes (8 partitions over 3 nodes is 4/2/2 = 50/25/25 %). The Riak
+entrypoint defaults to 128, and `test/scale` refuses `-ring-size` below 128 and fails verification
+when any node owns more or fewer partitions than `ring_size/nodes` rounded down/up. `ring_size`
+cannot be changed on an existing cluster; recreate it.
