@@ -113,10 +113,39 @@ success prints `MATCH: Riak holds exactly what the CRs declare`.
 | `-delete-users-every N` | then delete every Nth RiakUser and verify the Riak users are gone too |
 | `-verify-workers` | parallel `kubectl exec` calls while verifying (default 6) |
 | `-verify-timeout` | how long verification retries before reporting mismatches |
+| `-monitoring` | enable `spec.monitoring` on every cluster and verify the Riak metrics (see below) |
 
 ```bash
 go run ./test/scale -clusters 3 -users 20 -buckets 20 -replicas 3 \
   -storage-class lvms-vg1 -mutate -delete-users-every 4 -timeout 30m
+```
+
+### Verifying Riak metrics
+
+With `-monitoring` (or `make scale-test MONITORING=true`) every RiakCluster is
+created with `spec.monitoring.enabled: true`, so each Riak pod gets the
+`json_exporter` sidecar (see
+[Prometheus metrics](operator-configuration.md#prometheus-metrics-specmonitoring)).
+After convergence the harness checks that:
+
+- every cluster reports `status.monitoringStatus.enabled` and `exporterReady`;
+- **every node** serves the exporter's Riak probe — scraped through the
+  apiserver pod proxy (`/api/v1/namespaces/<ns>/pods/<pod>:7979/proxy/probe`),
+  so no Prometheus is needed — with `riak_node_gets_total`,
+  `riak_node_puts_total`, `riak_vnode_gets_total`, `riak_memory_system` and
+  `riak_ring_num_partitions` present;
+- `riak_ring_num_partitions` equals the `ring_size` the harness configured,
+  which cross-checks the exporter against live Riak rather than just its shape.
+
+It retries for `-verify-timeout` and prints `METRICS OK` or `METRICS:` lines.
+It also works with `-verify-only -monitoring` against a namespace kept with
+`-keep`. The harness does not need the Prometheus Operator; if it is installed,
+the operator also creates a `ServiceMonitor` per cluster, so Prometheus scrapes
+the fleet during the run and you can chart Riak (`riak_node_*`) next to the
+operator's own series.
+
+```bash
+go run ./test/scale -clusters 3 -users 10 -buckets 10 -replicas 3 -monitoring
 ```
 
 It prints a live phase count and a summary: per-kind convergence time and

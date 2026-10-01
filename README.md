@@ -476,7 +476,7 @@ kubectl exec -it my-cluster-0 -c riak -- riak-admin bucket-type list
 
 ### Scaling
 
-Running the operator at fleet scale (dozens of clusters, hundreds of users/buckets)? See [docs/scaling.md](docs/scaling.md) for behaviour notes and a load-test harness (`make scale-test`).
+Running the operator at fleet scale (dozens of clusters, hundreds of users/buckets)? See [docs/scaling.md](docs/scaling.md) for behaviour notes and a load-test harness (`make scale-test`, `MONITORING=true` to also verify Riak's Prometheus metrics).
 
 ## Development Setup
 
@@ -597,7 +597,7 @@ For issues, questions, or feature requests:
 
 - [x] TLS/cert-manager integration (server TLS + mTLS client-certificate user auth)
 - [ ] Automated backups
-- [ ] Cluster monitoring and metrics
+- [x] Cluster monitoring and metrics
 - [ ] Helm chart
 - [ ] Riak search integration
 - [ ] Multi-datacenter support

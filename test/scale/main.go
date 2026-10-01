@@ -52,17 +52,18 @@ import (
 )
 
 type opts struct {
-	clusters  int
-	users     int
-	buckets   int
-	namespace string
-	image     string
-	storage   string
-	timeout   time.Duration
-	poll      time.Duration
-	keep      bool
-	ephemeral bool
-	replicas  int
+	clusters   int
+	users      int
+	buckets    int
+	namespace  string
+	image      string
+	storage    string
+	timeout    time.Duration
+	poll       time.Duration
+	keep       bool
+	ephemeral  bool
+	replicas   int
+	monitoring bool
 
 	verify      bool
 	verifyOnly  bool
@@ -86,6 +87,8 @@ func main() {
 	flag.DurationVar(&o.poll, "poll", 5*time.Second, "status poll interval")
 	flag.BoolVar(&o.keep, "keep", false, "keep resources after the run instead of deleting them")
 	flag.IntVar(&o.replicas, "replicas", 1, "Riak nodes per RiakCluster (spec.size)")
+	flag.BoolVar(&o.monitoring, "monitoring", false,
+		"enable spec.monitoring (json_exporter sidecar) on every cluster and verify the riak_* metrics on every node")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
 	flag.IntVar(&o.ringSize, "ring-size", minRingSize,
@@ -131,7 +134,13 @@ func run(o opts) error {
 	ctx := context.Background()
 
 	if o.verifyOnly {
-		return verifyEventually(ctx, c, o, "existing state")
+		if err := verifyEventually(ctx, c, o, "existing state"); err != nil {
+			return err
+		}
+		if o.monitoring {
+			return verifyMetricsEventually(ctx, c, o)
+		}
+		return nil
 	}
 
 	total := o.clusters + o.clusters*o.users + o.clusters*o.buckets
@@ -169,6 +178,11 @@ func run(o opts) error {
 	}
 	if err := verifyEventually(ctx, c, o, "after convergence"); err != nil {
 		return err
+	}
+	if o.monitoring {
+		if err := verifyMetricsEventually(ctx, c, o); err != nil {
+			return err
+		}
 	}
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	if o.mutate {
@@ -318,6 +332,9 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 			Size:       size,
 			Image:      o.image,
 			RiakConfig: map[string]string{"ring_size": strconv.Itoa(o.ringSize)},
+		}
+		if o.monitoring {
+			spec.Monitoring = &riakv1.MonitoringConfig{Enabled: true}
 		}
 		if o.ephemeral {
 			spec.EphemeralStorage = true

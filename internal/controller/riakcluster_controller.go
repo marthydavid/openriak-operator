@@ -550,6 +550,14 @@ func (r *RiakClusterReconciler) reconcileService(ctx context.Context, cluster *r
 	}
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, clientSvc, func() error {
+		// The ServiceMonitor selects this Service by label. Only the client
+		// Service carries them: labelling the headless one too would make
+		// Prometheus scrape every pod twice.
+		if clientSvc.Labels == nil {
+			clientSvc.Labels = map[string]string{}
+		}
+		clientSvc.Labels["app"] = "riak"
+		clientSvc.Labels["cluster"] = cluster.Name
 		clientSvc.Spec = corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
 			Selector: map[string]string{"app": "riak", "cluster": cluster.Name},
