@@ -151,3 +151,45 @@ Or without a port-forward, through the apiserver:
 `kubectl get --raw '/api/v1/namespaces/<ns>/pods/<pod>:7979/proxy/probe?module=riak&target=http://127.0.0.1:8098/stats'`.
 `status.monitoringStatus.exporterReady` is true once every node's sidecar is ready. The
 [scale test](scaling.md#verifying-riak-metrics) automates this check across a whole fleet.
+
+## Operator metrics
+
+The operator's own `/metrics` endpoint (separate from the per-node `riak_*` series above) also
+exports the state of the custom resources it manages. No extra Deployment is involved: the
+values are computed on every scrape from the manager's cache, so deleted resources never leave
+stale series behind.
+
+The endpoint is off unless `--metrics-bind-address` is set (`:8443` for HTTPS, `:8080` with
+`--metrics-secure=false`). The Helm chart enables it by default (`metrics.enabled`) and creates a
+`ServiceMonitor` for it when `metrics.serviceMonitor.enabled=true` (needs the Prometheus Operator
+CRDs). The scraper's ServiceAccount needs the `metrics-reader` role, as for any controller-runtime
+metrics endpoint.
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `openriak_riakcluster_phase` | `namespace`, `name`, `phase` | 1 for the cluster's current phase (`Creating`, `Ready`, `Updating`, `Failed`), 0 for the others |
+| `openriak_riakcluster_nodes` | `namespace`, `name`, `state` | Node count; `state` is `ready` or `total` |
+| `openriak_riakcluster_monitoring_ready` | `namespace`, `name` | 1 when monitoring is enabled and every exporter sidecar is ready |
+| `openriak_riakcluster_tls_ready` | `namespace`, `name` | 1 when TLS is enabled and client TLS is ready |
+| `openriak_riakbuckets` | `namespace`, `cluster`, `phase` | RiakBuckets per target cluster and phase |
+| `openriak_riakusers` | `namespace`, `cluster`, `phase` | RiakUsers per target cluster and phase |
+| `openriak_riakuser_certificates` | `namespace`, `cluster`, `ready` | RiakUsers by whether the mTLS client certificate is issued (`true`/`false`) |
+| `openriak_resources` | `kind`, `phase` | Fleet-wide count per kind (`RiakCluster`, `RiakBucket`, `RiakUser`) and phase |
+
+Only RiakClusters get per-object series. Buckets and users are aggregated per
+(namespace, cluster, phase) so cardinality stays flat when a fleet has hundreds of users. A
+resource whose controller has not written a status yet counts under phase `Pending`.
+
+```promql
+# Clusters that are not Ready
+openriak_riakcluster_phase{phase="Ready"} == 0
+
+# Clusters with nodes down
+openriak_riakcluster_nodes{state="ready"} < ignoring(state) openriak_riakcluster_nodes{state="total"}
+
+# Failed users / buckets anywhere
+sum(openriak_resources{kind=~"RiakUser|RiakBucket", phase="Failed"}) > 0
+
+# Users still waiting for cert-manager to issue a client certificate
+sum by (namespace, cluster) (openriak_riakuser_certificates{ready="false"})
+```

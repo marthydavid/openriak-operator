@@ -174,6 +174,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "RiakUser")
 		os.Exit(1)
 	}
+	// CR-state gauges (cluster phase/nodes, bucket and user counts) on the manager's /metrics.
+	if err = controller.RegisterCRStateMetrics(mgr.GetClient(), ctrl.Log.WithName("metrics")); err != nil {
+		setupLog.Error(err, "unable to register CR state metrics")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
