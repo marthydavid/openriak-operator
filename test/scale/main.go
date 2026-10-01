@@ -70,9 +70,11 @@ type opts struct {
 	mutate      bool
 	deleteEvery int
 
-	ringSize      int
-	verifyWorkers int
-	verifyTimeout time.Duration
+	ringSize int
+
+	operatorNamespace string
+	verifyWorkers     int
+	verifyTimeout     time.Duration
 }
 
 func main() {
@@ -91,6 +93,7 @@ func main() {
 		"enable spec.monitoring (json_exporter sidecar) on every cluster and verify the riak_* metrics on every node")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
+	flag.StringVar(&o.operatorNamespace, "operator-namespace", "", "namespace of the operator pod, checked for restarts/OOMKills (default: find by label in any namespace)")
 	flag.IntVar(&o.ringSize, "ring-size", minRingSize,
 		"Riak ring_size (a power of two, at least 128). Tiny rings cannot balance: 8 partitions over 3 nodes is 4/2/2")
 	flag.IntVar(&o.verifyWorkers, "verify-workers", 6, "parallel kubectl exec calls while verifying")
@@ -141,9 +144,11 @@ func run(o opts) error {
 			if err := verifyMetricsEventually(ctx, c, o); err != nil {
 				return err
 			}
-			return exerciseMetrics(ctx, c, o)
+			if err := exerciseMetrics(ctx, c, o); err != nil {
+				return err
+			}
 		}
-		return nil
+		return verifyOperatorHealthy(ctx, c, o)
 	}
 
 	total := o.clusters + o.clusters*o.users + o.clusters*o.buckets
@@ -174,10 +179,13 @@ func run(o opts) error {
 		total, time.Since(start).Round(time.Millisecond), o.timeout)
 
 	if err := waitReady(ctx, c, o, start); err != nil {
+		// A crash-looping operator shows up as slow convergence, not as an error:
+		// say so when convergence fails (issue #48).
+		_ = verifyOperatorHealthy(ctx, c, o)
 		return err
 	}
 	if !o.verify {
-		return nil
+		return verifyOperatorHealthy(ctx, c, o)
 	}
 	if err := verifyEventually(ctx, c, o, "after convergence"); err != nil {
 		return err
@@ -219,7 +227,7 @@ func run(o opts) error {
 			return err
 		}
 	}
-	return nil
+	return verifyOperatorHealthy(ctx, c, o)
 }
 
 // verifyEventually re-runs verifyAll until Riak matches the CRs or the verify
