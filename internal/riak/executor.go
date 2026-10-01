@@ -95,6 +95,9 @@ func (e *Executor) GetClusterMembers(ctx context.Context, namespace, podName, co
 	return members, nil
 }
 
+// memberStatusValid is the member-status state of a node that is a settled ring member.
+const memberStatusValid = "valid"
+
 // ClusterMember is one row of `riak-admin member-status`.
 type ClusterMember struct {
 	Status string // valid, joining, leaving, exiting, down
@@ -122,7 +125,7 @@ func parseMemberStatus(output string) []ClusterMember {
 			continue
 		}
 		switch f[0] {
-		case "valid", "joining", "leaving", "exiting", "down":
+		case memberStatusValid, "joining", "leaving", "exiting", "down":
 			members = append(members, ClusterMember{Status: f[0], Node: f[3]})
 		}
 	}

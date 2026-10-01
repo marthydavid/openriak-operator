@@ -34,6 +34,17 @@ import (
 	"github.com/marthydavid/openriak-operator/test/utils"
 )
 
+// riakAdmin builds a `kubectl exec` that runs riak-admin in a Riak pod the way
+// the operator does: pointed at the generated vm.args. Without VMARGS_PATH,
+// riak-admin falls back to the release default (-sname riak) and cannot reach a
+// node started with a fully qualified name.
+func riakAdmin(ns, pod string, args ...string) *exec.Cmd {
+	kubectlArgs := []string{"exec", "-n", ns, pod, "-c", "riak", "--", "sh", "-c",
+		`VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args 2>/dev/null | tail -1) exec riak-admin "$@"`,
+		"riak-admin"}
+	return exec.Command("kubectl", append(kubectlArgs, args...)...)
+}
+
 // collectDiagnostics gathers logs and events from the operator and Riak operand pods
 // and writes them to logDir so they can be uploaded as CI artifacts.
 func collectDiagnostics(controllerPodName string) {
@@ -387,8 +398,7 @@ spec:
 			// Regression: the entrypoint used to gate on `riak ping`, which never
 			// succeeds in this image even though the node is healthy.
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
-					"riak-admin", "status")
+				cmd := riakAdmin(riakNS, clusterName+"-0", "status")
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(out).To(ContainSubstring("stats for"))
@@ -486,8 +496,7 @@ spec:
 			// write), so the Riak-side check is for the type.
 			By("verifying the bucket type exists via riak-admin bucket-type list")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
-					"riak-admin", "bucket-type", "list")
+				cmd := riakAdmin(riakNS, clusterName+"-0", "bucket-type", "list")
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to list bucket types")
 				g.Expect(out).To(ContainSubstring("e2e-app-type"),
@@ -534,8 +543,7 @@ spec:
 		It("the RiakBucket is bound to the multi_backend entry from its properties", func() {
 			By("verifying bucket-type status shows the backend property")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
-					"riak-admin", "bucket-type", "status", "e2e-app-type")
+				cmd := riakAdmin(riakNS, clusterName+"-0", "bucket-type", "status", "e2e-app-type")
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to get bucket type status")
 				g.Expect(out).To(ContainSubstring("mem_ttl"),
@@ -546,8 +554,7 @@ spec:
 		It("RiakUser exists in the Riak cluster after CR reaches Ready", func() {
 			By("verifying the user exists via riak-admin security listing")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
-					"riak-admin", "security", "print-users")
+				cmd := riakAdmin(riakNS, clusterName+"-0", "security", "print-users")
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to list users")
 				if !strings.Contains(out, "e2euser") {
@@ -565,8 +572,7 @@ spec:
 		It("RiakUser grants are applied correctly in the Riak cluster", func() {
 			By("verifying the user has read/write grants via riak-admin security listing")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "exec", "-n", riakNS, clusterName+"-0", "--",
-					"riak-admin", "security", "print-grants", "e2euser")
+				cmd := riakAdmin(riakNS, clusterName+"-0", "security", "print-grants", "e2euser")
 				out, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to print user grants")
 				// Verify that grants include read and write permissions

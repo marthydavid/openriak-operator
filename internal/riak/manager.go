@@ -57,7 +57,7 @@ func (m *Manager) ReconcileMembership(ctx context.Context, cluster *riakv1.RiakC
 	valid := 0
 	for _, mem := range seedMembers {
 		inRing[mem.Node] = true
-		if mem.Status == "valid" {
+		if mem.Status == memberStatusValid {
 			valid++
 		}
 		if mem.Node == "riak@"+seed || strings.HasPrefix(mem.Node, "riak@"+seed+".") {
