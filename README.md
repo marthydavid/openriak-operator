@@ -1,5 +1,7 @@
 # OpenRiak Operator
 
+📖 **Documentation: <https://marthydavid.github.io/openriak-operator/>**
+
 A production-ready Kubernetes operator for managing Riak clusters with full lifecycle automation, user management, and bucket provisioning.
 
 ## ✨ Features
