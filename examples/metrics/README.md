@@ -30,15 +30,27 @@ Thresholds are starting points; each alert carries a `runbook` annotation with f
 
 Panels cover throughput, GET/PUT latency percentiles, vnode operations, read repairs,
 Protocol Buffers connections, object size, ring size and Erlang memory/process count.
-Import via Grafana > Dashboards > Import and pick your Prometheus data source (`DS_PROMETHEUS`).
-The `cluster` and `pod` variables come from `label_values(riak_ring_num_partitions, ...)`.
+Variables: a `DS_PROMETHEUS` data-source picker, then `namespace`, `cluster` and `pod`, each
+narrowed by the previous one (`label_values(riak_ring_num_partitions{...}, ...)`); every panel
+is filtered by namespace and cluster. All three allow multi-select / All.
+
+Three ways to get it into Grafana:
+
+- Import the JSON via Grafana > Dashboards > Import.
+- **Helm chart (recommended):** `--set dashboard.enabled=true` creates a ConfigMap labelled
+  `grafana_dashboard: "1"` for Grafana's dashboard sidecar, e.g.
+  `helm upgrade --install openriak-operator ... --set dashboard.enabled=true --set dashboard.namespace=monitoring`.
+  See the chart README for `dashboard.namespace` / `labels` / `annotations` (Grafana folder).
+- Put the file in your own ConfigMap with the label your sidecar selects on.
+
+The chart carries its own copy at `charts/openriak-operator/dashboards/riak-kv.json`; edit the
+example and run `make sync-dashboard` (CI fails if the two differ).
 
 ## Apply
 
 ```bash
 kubectl apply -f podmonitor.yaml -f prometheusrule.yaml
-# dashboard: import grafana-dashboard.json in the Grafana UI, or load it into a
-# ConfigMap labelled grafana_dashboard=1 if you run the Grafana sidecar provisioner
+# dashboard: helm ... --set dashboard.enabled=true, or import grafana-dashboard.json in Grafana
 ```
 
 ## Assumptions

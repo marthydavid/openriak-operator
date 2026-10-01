@@ -228,3 +228,7 @@ scale-test: ## Run the operator load-test harness against the current kubeconfig
 		-users $(or $(USERS),5) \
 		-buckets $(or $(BUCKETS),5) \
 		-monitoring=$(or $(MONITORING),false)
+
+.PHONY: sync-dashboard
+sync-dashboard: ## Copy the Grafana dashboard example into the Helm chart (CI fails when they differ).
+	cp examples/metrics/grafana-dashboard.json charts/openriak-operator/dashboards/riak-kv.json

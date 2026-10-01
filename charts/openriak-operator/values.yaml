@@ -43,6 +43,23 @@ metrics:
     tlsConfig:
       insecureSkipVerify: true
 
+# Riak KV Grafana dashboard, shipped as a ConfigMap for Grafana's dashboard
+# sidecar (kube-prometheus-stack, grafana chart, OpenShift/OKD, ...). It has
+# namespace, cluster and pod selectors and expects the series of RiakClusters
+# with spec.monitoring enabled (PodMonitor scrapeKind keeps the namespace and
+# cluster labels on them).
+dashboard:
+  enabled: false
+  # Namespace of the ConfigMap; defaults to the release namespace. Set it to
+  # Grafana's namespace if the sidecar only watches that one.
+  namespace: ""
+  # Label the sidecar selects on (kube-prometheus-stack default: grafana_dashboard).
+  labels:
+    grafana_dashboard: "1"
+  # Extra annotations, e.g. the Grafana folder:
+  #   grafana_folder: OpenRiak
+  annotations: {}
+
 serviceAccount:
   create: true
   # Defaults to the release fullname when empty.
