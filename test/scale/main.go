@@ -138,7 +138,10 @@ func run(o opts) error {
 			return err
 		}
 		if o.monitoring {
-			return verifyMetricsEventually(ctx, c, o)
+			if err := verifyMetricsEventually(ctx, c, o); err != nil {
+				return err
+			}
+			return exerciseMetrics(ctx, c, o)
 		}
 		return nil
 	}
@@ -181,6 +184,9 @@ func run(o opts) error {
 	}
 	if o.monitoring {
 		if err := verifyMetricsEventually(ctx, c, o); err != nil {
+			return err
+		}
+		if err := exerciseMetrics(ctx, c, o); err != nil {
 			return err
 		}
 	}

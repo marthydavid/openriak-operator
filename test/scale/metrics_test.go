@@ -52,3 +52,32 @@ func TestCheckMetrics_rejectsImplausibleValues(t *testing.T) {
 		t.Fatalf("want zero memory and negative counter reported, got %v", bad)
 	}
 }
+
+func TestExerciseDeltas(t *testing.T) {
+	before := map[string]map[string]float64{
+		"c-0": {"riak_node_puts_total": 1, "riak_node_gets_total": 2, "riak_vnode_puts_total": 1},
+		"c-1": {"riak_vnode_puts_total": 1},
+		"c-2": {"riak_vnode_puts_total": 1},
+	}
+	good := map[string]map[string]float64{
+		"c-0": {"riak_node_puts_total": 2, "riak_node_gets_total": 4, "riak_vnode_puts_total": 2},
+		"c-1": {"riak_vnode_puts_total": 2},
+		"c-2": {"riak_vnode_puts_total": 2},
+	}
+	if bad := exerciseDeltas(before, good, "c-0"); len(bad) != 0 {
+		t.Fatalf("a write replicated to 3 vnodes is healthy: %v", bad)
+	}
+	// Only the coordinator counted: the replicas' vnode puts did not move.
+	lonely := map[string]map[string]float64{
+		"c-0": {"riak_node_puts_total": 2, "riak_node_gets_total": 4, "riak_vnode_puts_total": 2},
+		"c-1": {"riak_vnode_puts_total": 1},
+		"c-2": {"riak_vnode_puts_total": 1},
+	}
+	if bad := exerciseDeltas(before, lonely, "c-0"); len(bad) != 1 {
+		t.Fatalf("want the missing replication reported, got %v", bad)
+	}
+	// Nothing moved at all.
+	if bad := exerciseDeltas(before, before, "c-0"); len(bad) != 3 {
+		t.Fatalf("want puts, gets and replication reported, got %v", bad)
+	}
+}
