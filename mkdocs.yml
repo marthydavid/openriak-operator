@@ -1,0 +1,51 @@
+site_name: OpenRiak Operator
+site_description: Kubernetes operator for Riak KV — clusters, users and buckets as custom resources.
+site_url: https://marthydavid.github.io/openriak-operator/
+repo_url: https://github.com/marthydavid/openriak-operator
+repo_name: marthydavid/openriak-operator
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - scheme: slate
+      primary: indigo
+      toggle: { icon: material/weather-sunny, name: Light mode }
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Install on Kubernetes: getting-started/kubernetes.md
+      - Install on OpenShift: getting-started/openshift.md
+      - Quick start: getting-started/quickstart.md
+  - CRD guides:
+      - RiakCluster: crds/riakcluster.md
+      - RiakUser: crds/riakuser.md
+      - RiakBucket: crds/riakbucket.md
+  - Examples: examples.md
+  - Platform reference:
+      - Vanilla Kubernetes: platforms/kubernetes.md
+      - OpenShift: platforms/openshift.md
+  - Operations:
+      - mTLS with cert-manager: mtls.md
+      - Operator configuration: operator-configuration.md
+      - Scaling: scaling.md
+      - Troubleshooting: troubleshooting.md
