@@ -62,7 +62,7 @@ spec:
 ```yaml
 spec:
   riakConfig:
-    ring_size: "64"
+    ring_size: "128"
     transfer_limit: "2"
     anti_entropy: "on"
 ```
@@ -73,6 +73,34 @@ spec:
     [Operator configuration](../operator-configuration.md#riak-configuration-specriakconfig).
 
 `ring_size` must be a power of two and is fixed when the cluster is first formed.
+
+!!! tip "Use a ring size of at least 128"
+    A ring is divided into whole partitions, so a small ring cannot be spread evenly over a few
+    nodes: 8 partitions over 3 nodes is 4/2/2 (50/25/25 %). With 128 partitions, 3 nodes own
+    43/42/43. The Riak image defaults to 128 when `ring_size` is not set.
+
+## Multi-node clusters
+
+For `size` greater than 1 the operator forms the ring itself:
+
+1. Nodes are named by their pod FQDN (`riak@<pod>.<cluster>-headless.<ns>.svc.<domain>`), so
+   they can reach each other.
+2. Once every pod is Ready, the operator joins each standalone node to `<cluster>-0`, then plans
+   and commits once.
+3. The cluster only reports `Ready` when **every** node is a valid ring member. Until then
+   `status.phase` stays `Creating` with the condition reason `FormingCluster`.
+
+!!! note "Operand image"
+    Multi-node formation needs the Riak image from operator `0.0.8` or later
+    (`ghcr.io/marthydavid/riak:3.2.6` was rebuilt for it). Older images name nodes by the bare pod
+    name, which Erlang refuses for remote nodes.
+
+To inspect the ring, run `riak-admin` against the generated `vm.args`:
+
+```bash
+kubectl exec my-cluster-0 -c riak -- sh -c \
+  'VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args | tail -1) riak-admin member-status'
+```
 
 ## TLS
 
