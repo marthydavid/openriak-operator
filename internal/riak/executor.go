@@ -71,7 +71,51 @@ func (e *Executor) ExecuteRiakAdmin(ctx context.Context, namespace, podName, con
 		e.log.Error(err, "riak-admin command failed", "pod", podName, "args", args)
 		return "", fmt.Errorf("riak-admin failed: %w", err)
 	}
+	if riakAdminFailed(out) {
+		err := fmt.Errorf("riak-admin %s failed: %s", strings.Join(subcommand(args), " "), compactOutput(out))
+		e.log.Error(err, "riak-admin command reported an error", "pod", podName, "args", args)
+		return out, err
+	}
 	return out, nil
+}
+
+// riakAdminFailed reports whether riak-admin output signals a failure.
+// riak-admin exits 0 even when the command fails: the node's reply is printed
+// instead, either as a bare "error" on the last line (bucket-type commands) or
+// as an {error,Reason} term (security commands). Without this check every
+// failed command would look like a success.
+func riakAdminFailed(out string) bool {
+	last := ""
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "{error,") {
+			return true
+		}
+		last = line
+	}
+	return last == "error"
+}
+
+// subcommand returns the riak-admin subcommand words (e.g. "bucket-type create")
+// for error messages, without arguments that may be long JSON documents.
+func subcommand(args []string) []string {
+	if len(args) > 2 {
+		return args[:2]
+	}
+	return args
+}
+
+// compactOutput folds riak-admin output onto one line, capped, for an error message.
+func compactOutput(out string) string {
+	s := strings.Join(strings.Fields(out), " ")
+	const maxLen = 300
+	if len(s) > maxLen {
+		s = s[:maxLen] + "..."
+	}
+	return s
 }
 
 // GetClusterMembers retrieves the list of cluster members from a node.
@@ -154,7 +198,11 @@ func (e *Executor) GetStatus(ctx context.Context, namespace, podName, containerN
 	return e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "status")
 }
 
-// CreateBucket creates a bucket type with the given properties.
+// CreateBucket makes a bucket type exist, be active, and carry the given
+// properties. A type that is already active cannot be re-created, so its
+// properties are applied with `bucket-type update` instead: without that, an
+// edited RiakBucket would never reach Riak. Riak's built-in "default" type can
+// only be updated, never created or activated.
 // Riak requires JSON: riak-admin bucket-type create <type> '{"props":{"n_val":3}}'
 // String values that parse as a JSON literal (number, bool) are sent as their native type.
 func (e *Executor) CreateBucket(ctx context.Context, namespace, podName, containerName, bucketType, _ string, properties map[string]string) error {
@@ -174,16 +222,23 @@ func (e *Executor) CreateBucket(ctx context.Context, namespace, podName, contain
 	}
 
 	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "bucket-type", "create", bucketType, string(propsJSON))
-	if err != nil && !strings.Contains(err.Error(), "already") {
+	switch {
+	case err == nil:
+		// New (or created but never activated, which create overwrites): activate it.
+		_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "bucket-type", "activate", bucketType)
+		if err != nil && !strings.Contains(err.Error(), "already") {
+			return err
+		}
+		return nil
+	case strings.Contains(err.Error(), "already_active"), strings.Contains(err.Error(), "default_type"):
+		if len(props) == 0 {
+			return nil
+		}
+		_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "bucket-type", "update", bucketType, string(propsJSON))
+		return err
+	default:
 		return err
 	}
-
-	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "bucket-type", "activate", bucketType)
-	if err != nil && !strings.Contains(err.Error(), "already") {
-		return err
-	}
-
-	return nil
 }
 
 // CreateUserForCert creates a Riak user without a password for certificate-based authentication.
@@ -193,6 +248,9 @@ func (e *Executor) CreateUserForCert(ctx context.Context, namespace, podName, co
 	// Security must already be enabled on the cluster (see EnableSecurity); it is
 	// enabled once per cluster rather than here, per user.
 	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "add-user", username)
+	if err != nil && strings.Contains(err.Error(), "role_exists") {
+		return nil // reconciles re-run this; an existing user is the goal
+	}
 	return err
 }
 
@@ -285,9 +343,13 @@ func (e *Executor) RevokePermissions(ctx context.Context, namespace, podName, co
 	return err
 }
 
-// DeleteUser removes a Riak user together with its grants and sources.
+// DeleteUser removes a Riak user together with its grants and sources. A user
+// Riak does not know is already deleted.
 func (e *Executor) DeleteUser(ctx context.Context, namespace, podName, containerName, username string) error {
 	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "del-user", username)
+	if err != nil && strings.Contains(err.Error(), "unknown_user") {
+		return nil
+	}
 	return err
 }
 

@@ -263,12 +263,174 @@ func TestCreateBucket_emptyProps(t *testing.T) {
 	}
 }
 
-func TestCreateBucket_ignoresAlreadyExistsError(t *testing.T) {
-	runner, _ := mockRunner(nil, map[string]error{"bucket-type": errors.New("Error: bucket type already exists")})
-	e := newTestExecutor(runner)
+// Real riak-admin output, captured from Riak 3.2.6. riak-admin exits 0 on
+// failure, so these replies arrive as successful command output.
+const (
+	outCreateAlreadyActive = "Error creating bucket type t1:\nalready_active\nerror"
+	outCreateDefaultType   = "Error creating bucket type default:\ndefault_type\nerror"
+	outUpdated             = "t1 updated\nok"
+)
 
-	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "existing", "", nil); err != nil {
-		t.Fatalf("expected no error for already-exists, got: %v", err)
+// bucketTypeRunner answers each bucket-type subcommand with a fixed output and
+// records the subcommands that ran.
+func bucketTypeRunner(outputs map[string]string, ran *[]string) func(context.Context, string, ...string) (string, error) {
+	return func(_ context.Context, _ string, args ...string) (string, error) {
+		for i, a := range args {
+			if a == "bucket-type" && i+1 < len(args) {
+				*ran = append(*ran, args[i+1])
+				return outputs[args[i+1]], nil
+			}
+		}
+		return "", nil
+	}
+}
+
+func TestCreateBucket_updatesAnActiveType(t *testing.T) {
+	var ran []string
+	e := newTestExecutor(bucketTypeRunner(map[string]string{
+		"create": outCreateAlreadyActive, "update": outUpdated}, &ran))
+
+	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", map[string]string{"n_val": "2"}); err != nil {
+		t.Fatalf("expected the existing type to be updated, got: %v", err)
+	}
+	if strings.Join(ran, ",") != "create,update" {
+		t.Errorf("expected create then update, got %v", ran)
+	}
+}
+
+func TestCreateBucket_activeTypeWithoutPropsIsDone(t *testing.T) {
+	var ran []string
+	e := newTestExecutor(bucketTypeRunner(map[string]string{"create": outCreateAlreadyActive}, &ran))
+
+	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Join(ran, ",") != "create" {
+		t.Errorf("expected only create, got %v", ran)
+	}
+}
+
+func TestCreateBucket_defaultTypeIsUpdated(t *testing.T) {
+	var ran []string
+	e := newTestExecutor(bucketTypeRunner(map[string]string{
+		"create": outCreateDefaultType, "update": outUpdated}, &ran))
+
+	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "default", "", map[string]string{"allow_mult": "true"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Join(ran, ",") != "create,update" {
+		t.Errorf("expected create then update, got %v", ran)
+	}
+}
+
+func TestCreateBucket_returnsUpdateError(t *testing.T) {
+	var ran []string
+	e := newTestExecutor(bucketTypeRunner(map[string]string{
+		"create": outCreateAlreadyActive,
+		"update": "Error updating bucket type t1:\nWrite once buckets must not be consistent=true\nerror"}, &ran))
+
+	err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", map[string]string{"consistent": "true"})
+	if err == nil || !strings.Contains(err.Error(), "consistent=true") {
+		t.Fatalf("expected the update error with Riak's reason, got: %v", err)
+	}
+}
+
+func TestCreateBucket_returnsRejectedCreate(t *testing.T) {
+	var ran []string
+	e := newTestExecutor(bucketTypeRunner(map[string]string{
+		"create": "Cannot create bucket type t1: invalid json\nerror"}, &ran))
+
+	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", nil); err == nil {
+		t.Fatal("expected a create rejected by Riak to be an error")
+	}
+	if strings.Join(ran, ",") != "create" {
+		t.Errorf("activate must not run after a failed create, got %v", ran)
+	}
+}
+
+func TestCreateBucket_activateAlreadyActiveIsOK(t *testing.T) {
+	var ran []string
+	e := newTestExecutor(bucketTypeRunner(map[string]string{
+		"create": "t1 created\nok", "activate": "t1 has been activated\nok"}, &ran))
+
+	if err := e.CreateBucket(context.Background(), "ns", "pod", "riak", "t1", "", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Join(ran, ",") != "create,activate" {
+		t.Errorf("expected create then activate, got %v", ran)
+	}
+}
+
+// ---------- riak-admin failure detection ----------
+
+func TestRiakAdminFailed(t *testing.T) {
+	cases := []struct {
+		out  string
+		fail bool
+	}{
+		{"t1 created\nok", false},
+		{"", false},
+		{"Successfully granted\nok\n", false},
+		{outCreateAlreadyActive, true},
+		{"Name(s) not recognized: bob\n{error,{unknown_roles,[<<\"bob\">>]}}", true},
+		// add-user of an existing user: the error term, then a table and "ok".
+		{"This name is already in use\n{error,role_exists}\n\n| username |\nok", true},
+		{"nosuch is not an existing bucket type\n{error,undefined}", true},
+		{"an error occurred earlier\nok", false},
+	}
+	for _, c := range cases {
+		if got := riakAdminFailed(c.out); got != c.fail {
+			t.Errorf("riakAdminFailed(%q) = %v, want %v", c.out, got, c.fail)
+		}
+	}
+}
+
+func TestExecuteRiakAdmin_reportsFailureInOutput(t *testing.T) {
+	e := newTestExecutor(func(_ context.Context, _ string, _ ...string) (string, error) {
+		return "User(s) not recognized: bob\n{error,{unknown_users,[<<\"bob\">>]}}", nil
+	})
+	_, err := e.ExecuteRiakAdmin(context.Background(), "ns", "pod", "riak", "security", "add-source", "bob", "0.0.0.0/0", "certificate")
+	if err == nil {
+		t.Fatal("expected an error for a riak-admin reply carrying {error,...}")
+	}
+	if !strings.Contains(err.Error(), "security add-source") || !strings.Contains(err.Error(), "unknown_users") {
+		t.Errorf("error should name the subcommand and Riak's reason: %v", err)
+	}
+	if strings.Contains(err.Error(), "0.0.0.0/0") {
+		t.Errorf("error should not echo the command arguments: %v", err)
+	}
+}
+
+func TestCompactOutput_caps(t *testing.T) {
+	if got := compactOutput(strings.Repeat("x ", 400)); len(got) != 303 || !strings.HasSuffix(got, "...") {
+		t.Errorf("expected a 300-char capped message, got %d chars", len(got))
+	}
+}
+
+func TestCreateUserForCert_existingUserIsOK(t *testing.T) {
+	e := newTestExecutor(func(_ context.Context, _ string, _ ...string) (string, error) {
+		return "This name is already in use\n{error,role_exists}\nok", nil
+	})
+	if err := e.CreateUserForCert(context.Background(), "ns", "pod", "riak", "alice"); err != nil {
+		t.Fatalf("an existing user must not be an error: %v", err)
+	}
+}
+
+func TestDeleteUser_unknownUserIsOK(t *testing.T) {
+	e := newTestExecutor(func(_ context.Context, _ string, _ ...string) (string, error) {
+		return "User not recognized: alice\n{error,{unknown_user,<<\"alice\">>}}", nil
+	})
+	if err := e.DeleteUser(context.Background(), "ns", "pod", "riak", "alice"); err != nil {
+		t.Fatalf("deleting an unknown user must succeed: %v", err)
+	}
+}
+
+func TestDeleteUser_returnsOtherErrors(t *testing.T) {
+	e := newTestExecutor(func(_ context.Context, _ string, _ ...string) (string, error) {
+		return "", errors.New("exec failed")
+	})
+	if err := e.DeleteUser(context.Background(), "ns", "pod", "riak", "alice"); err == nil {
+		t.Fatal("expected the exec error")
 	}
 }
 

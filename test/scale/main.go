@@ -89,7 +89,8 @@ func main() {
 	flag.IntVar(&o.verifyWorkers, "verify-workers", 6, "parallel kubectl exec calls while verifying")
 	flag.DurationVar(&o.verifyTimeout, "verify-timeout", 10*time.Minute,
 		"how long verification may retry before reporting mismatches (the operator reconciles users serially, and Riak metadata gossips)")
-	flag.BoolVar(&o.mutate, "mutate", false, "after verifying, change/remove grants on some users and verify again")
+	flag.BoolVar(&o.mutate, "mutate", false,
+		"after verifying, change/remove grants on some users and change n_val/allow_mult on some buckets, then verify again")
 	flag.IntVar(&o.deleteEvery, "delete-users-every", 0, "after verifying, delete every Nth RiakUser and verify again (0 = off)")
 	flag.BoolVar(&o.ephemeral, "ephemeral", false,
 		"use emptyDir (spec.ephemeralStorage) instead of PVCs; for clusters without a storage provisioner")
@@ -236,6 +237,27 @@ func ensureIssuer(ctx context.Context, c client.Client, ns string) error {
 	return nil
 }
 
+// randomizeBucketProps gives a bucket a random n_val (1-3, via either typed
+// spelling) and allow_mult (via the typed field or spec.properties), so
+// verification covers every path by which the spec reaches the bucket type.
+func randomizeBucketProps(rng *rand.Rand, spec *riakv1.RiakBucketSpec) {
+	spec.NVal, spec.ReplicationFactor, spec.AllowMulti, spec.Properties = 0, 0, false, nil
+	n := int32(1 + rng.Intn(3))
+	if rng.Intn(2) == 0 {
+		spec.NVal = n
+	} else {
+		spec.ReplicationFactor = n
+	}
+	switch rng.Intn(3) {
+	case 0:
+		spec.AllowMulti = true
+	case 1:
+		spec.Properties = map[string]string{"allow_mult": "false"}
+	default:
+		spec.Properties = map[string]string{"allow_mult": "true"}
+	}
+}
+
 // randomGrants returns 1-4 distinct grants with random permissions against the
 // cluster's real bucket types (<cluster>-tNNN): mostly a whole type, sometimes a
 // bucket inside a type, occasionally `any`. With no buckets it falls back to a
@@ -316,6 +338,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 					BucketType:  fmt.Sprintf("%s-t%03d", cl, b),
 				},
 			}
+			randomizeBucketProps(rng, &bucket.Spec)
 			if err := c.Create(ctx, bucket); err != nil && !apiAlreadyExists(err) {
 				return fmt.Errorf("create bucket: %w", err)
 			}

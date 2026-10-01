@@ -22,10 +22,12 @@ import (
 	"math/rand"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
@@ -183,6 +185,42 @@ func activeBucketTypes(out string) map[string]bool {
 	return types
 }
 
+// expectedBucketProps is the harness's own reading of the RiakBucket contract:
+// spec.properties is the base, nVal (else replicationFactor) sets n_val, and
+// allowMulti=true sets allow_mult. Only these keys are checked; everything else
+// is Riak's default.
+func expectedBucketProps(spec riakv1.RiakBucketSpec) map[string]string {
+	want := map[string]string{}
+	for k, v := range spec.Properties {
+		want[k] = v
+	}
+	n := spec.NVal
+	if n == 0 {
+		n = spec.ReplicationFactor
+	}
+	if n > 0 {
+		want["n_val"] = strconv.Itoa(int(n))
+	}
+	if spec.AllowMulti {
+		want["allow_mult"] = "true"
+	}
+	return want
+}
+
+// parseBucketTypeStatus reads the "key: value" property lines of
+// `riak-admin bucket-type status <type>`.
+func parseBucketTypeStatus(out string) map[string]string {
+	props := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		k, v, ok := strings.Cut(line, ": ")
+		if !ok || strings.ContainsAny(k, " \t") {
+			continue
+		}
+		props[k] = strings.TrimSpace(v)
+	}
+	return props
+}
+
 func diffGrants(want, got map[string]map[string]bool) []string {
 	var d []string
 	for k, wt := range want {
@@ -204,8 +242,9 @@ func diffGrants(want, got map[string]map[string]bool) []string {
 }
 
 // verifyAll checks, on every node of every cluster, that what Riak holds equals
-// what the CRs declare: ring membership, active bucket types, users with a
-// certificate source, and each user's exact grants. It returns the mismatches.
+// what the CRs declare: ring membership, active bucket types and their
+// n_val/allow_mult/properties, users with a certificate source, and each user's
+// exact grants. It returns the mismatches.
 func verifyAll(ctx context.Context, c client.Client, o opts) ([]string, error) {
 	clusters := &riakv1.RiakClusterList{}
 	buckets := &riakv1.RiakBucketList{}
@@ -242,9 +281,11 @@ func verifyAll(ctx context.Context, c client.Client, o opts) ([]string, error) {
 	for ci := range clusters.Items {
 		cl := clusters.Items[ci]
 		var bts []string
+		var cbs []riakv1.RiakBucket
 		for _, b := range buckets.Items {
 			if b.Spec.ClusterName == cl.Name {
 				bts = append(bts, b.Spec.BucketType)
+				cbs = append(cbs, b)
 			}
 		}
 		var cus []riakv1.RiakUser
@@ -310,6 +351,23 @@ func verifyAll(ctx context.Context, c client.Client, o opts) ([]string, error) {
 					}
 				}
 			})
+			for _, b := range cbs {
+				bucket := b
+				run(func() { // bucket type properties
+					out, err := riakAdmin(o.namespace, pod, "bucket-type", "status", bucket.Spec.BucketType)
+					if err != nil {
+						fail("%s: %v", pod, err)
+						return
+					}
+					got := parseBucketTypeStatus(out)
+					for k, v := range expectedBucketProps(bucket.Spec) {
+						count()
+						if got[k] != v {
+							fail("%s: bucket type %s has %s=%q, spec wants %q", pod, bucket.Spec.BucketType, k, got[k], v)
+						}
+					}
+				})
+			}
 			for _, u := range cus {
 				user := u
 				run(func() { // exact grants
@@ -359,24 +417,63 @@ func mutateGrants(ctx context.Context, c client.Client, o opts, rng *rand.Rand) 
 	return n, nil
 }
 
-// waitObserved waits until every RiakUser's Ready condition has been computed for
-// its current generation, i.e. the operator has acted on the latest spec.
+// mutateBuckets re-randomises the properties of every 3rd bucket, always moving
+// n_val, so verification can prove that editing a RiakBucket changes Riak.
+func mutateBuckets(ctx context.Context, c client.Client, o opts, rng *rand.Rand) (int, error) {
+	buckets := &riakv1.RiakBucketList{}
+	if err := c.List(ctx, buckets, client.InNamespace(o.namespace)); err != nil {
+		return 0, err
+	}
+	sort.Slice(buckets.Items, func(i, j int) bool { return buckets.Items[i].Name < buckets.Items[j].Name })
+	n := 0
+	for i := range buckets.Items {
+		if i%3 != 0 {
+			continue
+		}
+		b := &buckets.Items[i]
+		old := expectedBucketProps(b.Spec)["n_val"]
+		for expectedBucketProps(b.Spec)["n_val"] == old {
+			randomizeBucketProps(rng, &b.Spec)
+		}
+		if err := c.Update(ctx, b); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// readyFor reports whether a Ready=True condition was computed for generation gen.
+func readyFor(conds []metav1.Condition, gen int64) bool {
+	for _, cond := range conds {
+		if cond.Type == "Ready" && cond.Status == metav1.ConditionTrue && cond.ObservedGeneration == gen {
+			return true
+		}
+	}
+	return false
+}
+
+// waitObserved waits until every RiakUser's and RiakBucket's Ready condition has
+// been computed for its current generation, i.e. the operator has acted on the
+// latest spec.
 func waitObserved(ctx context.Context, c client.Client, o opts, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
 		users := &riakv1.RiakUserList{}
-		if err := c.List(ctx, users, client.InNamespace(o.namespace)); err != nil {
-			return err
+		buckets := &riakv1.RiakBucketList{}
+		for _, l := range []client.ObjectList{users, buckets} {
+			if err := c.List(ctx, l, client.InNamespace(o.namespace)); err != nil {
+				return err
+			}
 		}
 		pending := 0
 		for _, u := range users.Items {
-			ok := false
-			for _, cond := range u.Status.Conditions {
-				if cond.Type == "Ready" && cond.Status == "True" && cond.ObservedGeneration == u.Generation {
-					ok = true
-				}
+			if !readyFor(u.Status.Conditions, u.Generation) {
+				pending++
 			}
-			if !ok {
+		}
+		for _, b := range buckets.Items {
+			if !readyFor(b.Status.Conditions, b.Generation) {
 				pending++
 			}
 		}
@@ -384,7 +481,7 @@ func waitObserved(ctx context.Context, c client.Client, o opts, timeout time.Dur
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%d RiakUsers have not observed their latest spec within %s", pending, timeout)
+			return fmt.Errorf("%d RiakUsers/RiakBuckets have not observed their latest spec within %s", pending, timeout)
 		}
 		time.Sleep(o.poll)
 	}
