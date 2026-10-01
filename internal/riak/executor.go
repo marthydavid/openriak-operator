@@ -73,7 +73,10 @@ func (e *Executor) ExecuteRiakAdmin(ctx context.Context, namespace, podName, con
 	}
 	if riakAdminFailed(out) {
 		err := fmt.Errorf("riak-admin %s failed: %s", strings.Join(subcommand(args), " "), compactOutput(out))
-		e.log.Error(err, "riak-admin command reported an error", "pod", podName, "args", args)
+		// Logged at debug level: idempotent callers expect and tolerate some of
+		// these replies (role_exists, already_active, ...), and callers that
+		// fail on it log the error themselves.
+		e.log.V(1).Info("riak-admin reported an error", "pod", podName, "args", args, "reply", compactOutput(out))
 		return out, err
 	}
 	return out, nil
