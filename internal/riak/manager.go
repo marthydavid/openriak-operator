@@ -127,16 +127,28 @@ func (m *Manager) CreateBucketType(ctx context.Context, cluster *riakv1.RiakClus
 	return m.executor.CreateBucket(ctx, cluster.Namespace, pod, "riak", bucketType, "", properties)
 }
 
-// GrantUserPermissions applies all of a user's grants, batched by target: one
-// riak-admin security-grant call per distinct (resource, bucket) instead of one
-// per grant. Each riak-admin call spawns a temporary Erlang VM on the node, so
-// this materially cuts provisioning cost for users with several grants and for
-// large fleets. Grouping preserves first-seen order so the emitted commands are
-// deterministic.
-func (m *Manager) GrantUserPermissions(ctx context.Context, cluster *riakv1.RiakCluster, username string, grants []riakv1.Grant) error {
-	if len(grants) == 0 {
-		return nil
+// grantKey is the identity of a grant target as Riak reports it (type, bucket),
+// with "*" for "any" and for a whole bucket type.
+func grantKey(resource, bucket string) (string, error) {
+	target, err := grantTarget(resource, bucket)
+	if err != nil {
+		return "", err
 	}
+	switch {
+	case target[0] == "any":
+		return "* *", nil
+	case len(target) == 1:
+		return target[0] + " *", nil
+	default:
+		return target[0] + " " + target[1], nil
+	}
+}
+
+// GrantUserPermissions makes the user's Riak grants equal the spec: it applies
+// every desired grant (batched by target: one riak-admin call per distinct
+// resource/bucket) and then revokes anything Riak holds that the spec no longer
+// lists, so removing a grant from the RiakUser actually removes the access.
+func (m *Manager) GrantUserPermissions(ctx context.Context, cluster *riakv1.RiakCluster, username string, grants []riakv1.Grant) error {
 	if len(cluster.Status.Members) == 0 {
 		return fmt.Errorf("no cluster members available")
 	}
@@ -153,13 +165,61 @@ func (m *Manager) GrantUserPermissions(ctx context.Context, cluster *riakv1.Riak
 		perms[t] = append(perms[t], g.Permission)
 	}
 
+	desired := map[string]map[string]bool{} // grantKey -> permission tokens
 	for _, t := range order {
 		if err := m.executor.GrantPermissions(ctx, cluster.Namespace, pod, "riak",
 			username, t.resource, t.bucket, perms[t]); err != nil {
 			return err
 		}
+		key, err := grantKey(t.resource, t.bucket)
+		if err != nil {
+			return err
+		}
+		if desired[key] == nil {
+			desired[key] = map[string]bool{}
+		}
+		for _, tok := range permissionTokens(perms[t]) {
+			desired[key][tok] = true
+		}
+	}
+
+	current, err := m.executor.GetUserGrants(ctx, cluster.Namespace, pod, "riak", username)
+	if err != nil {
+		return fmt.Errorf("read current grants: %w", err)
+	}
+	for _, entry := range current {
+		var stale []string
+		for _, tok := range entry.Tokens {
+			if !desired[entry.Type+" "+entry.Bucket][tok] {
+				stale = append(stale, tok)
+			}
+		}
+		if len(stale) == 0 {
+			continue
+		}
+		m.log.Info("revoking grants no longer in spec", "user", username,
+			"type", entry.Type, "bucket", entry.Bucket, "permissions", stale)
+		resource, bucket := "bucket", entry.Type
+		switch {
+		case entry.Type == "*":
+			resource, bucket = "any", ""
+		case entry.Bucket != "*":
+			bucket = entry.Type + " " + entry.Bucket
+		}
+		if err := m.executor.RevokePermissions(ctx, cluster.Namespace, pod, "riak",
+			username, resource, bucket, stale); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// DeleteUser removes the user (and with it its grants and sources) from Riak.
+func (m *Manager) DeleteUser(ctx context.Context, cluster *riakv1.RiakCluster, username string) error {
+	if len(cluster.Status.Members) == 0 {
+		return fmt.Errorf("no cluster members available")
+	}
+	return m.executor.DeleteUser(ctx, cluster.Namespace, cluster.Status.Members[0].Pod, "riak", username)
 }
 
 // CreateUserForCert creates a Riak user configured for certificate-based authentication.

@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	riakv1 "github.com/marthydavid/openriak-operator/api/v1"
@@ -309,6 +310,109 @@ var _ = Describe("RiakUser Controller", func() {
 			} else {
 				Expect(errors.IsNotFound(err)).To(BeTrue())
 			}
+		})
+	})
+
+	Context("Riak-side cleanup on deletion", func() {
+		const clusterRefName = "user-delete-cluster"
+
+		newUser := func(name, cluster string) types.NamespacedName {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: cluster,
+					Username:    name + "_riak",
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+					},
+				},
+			})).To(Succeed())
+			nn := types.NamespacedName{Name: name, Namespace: ns}
+			Expect(reconcileUser(ctx, name, ns)).To(Succeed()) // adds the finalizer
+			u := &riakv1.RiakUser{}
+			Expect(k8sClient.Get(ctx, nn, u)).To(Succeed())
+			u.Status.Created = true
+			Expect(k8sClient.Status().Update(ctx, u)).To(Succeed())
+			return nn
+		}
+
+		deleteAndReconcile := func(nn types.NamespacedName, runner func(context.Context, string, ...string) (string, error)) {
+			u := &riakv1.RiakUser{}
+			Expect(k8sClient.Get(ctx, nn, u)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, u)).To(Succeed())
+			r := &RiakUserReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), runner)}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		finalizerPresent := func(nn types.NamespacedName) bool {
+			u := &riakv1.RiakUser{}
+			if err := k8sClient.Get(ctx, nn, u); err != nil {
+				Expect(errors.IsNotFound(err)).To(BeTrue())
+				return false
+			}
+			return controllerutil.ContainsFinalizer(u, riakUserFinalizerName)
+		}
+
+		readyCluster := func() {
+			c := &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterRefName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
+			}
+			Expect(k8sClient.Create(ctx, c)).To(Succeed())
+			c.Status.Phase = riakv1.PhaseReady
+			c.Status.Members = []riakv1.RiakNodeMember{{Pod: clusterRefName + "-0", Name: clusterRefName + "-0"}}
+			Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+		}
+
+		AfterEach(func() {
+			c := &riakv1.RiakCluster{}
+			cnn := types.NamespacedName{Name: clusterRefName, Namespace: ns}
+			if err := k8sClient.Get(ctx, cnn, c); err == nil {
+				_ = k8sClient.Delete(ctx, c)
+				cr := &RiakClusterReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+				_, _ = cr.Reconcile(ctx, reconcile.Request{NamespacedName: cnn})
+			}
+		})
+
+		It("deletes the Riak user when the RiakUser is deleted", func() {
+			readyCluster()
+			nn := newUser("cleanup-user", clusterRefName)
+			var cmds []string
+			deleteAndReconcile(nn, func(_ context.Context, _ string, args ...string) (string, error) {
+				cmds = append(cmds, strings.Join(args, " "))
+				return "", nil
+			})
+			Expect(strings.Join(cmds, "\n")).To(ContainSubstring("security del-user cleanup-user_riak"))
+			Expect(finalizerPresent(nn)).To(BeFalse())
+		})
+
+		It("keeps the finalizer and retries while the Riak delete fails", func() {
+			readyCluster()
+			nn := newUser("cleanup-retry-user", clusterRefName)
+			deleteAndReconcile(nn, func(_ context.Context, _ string, _ ...string) (string, error) {
+				return "", fmt.Errorf("exec failed")
+			})
+			Expect(finalizerPresent(nn)).To(BeTrue(), "deletion must wait for the Riak-side cleanup")
+
+			By("letting a later reconcile succeed")
+			r := &RiakUserReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), func(_ context.Context, _ string, _ ...string) (string, error) {
+					return "", nil
+				})}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(finalizerPresent(nn)).To(BeFalse())
+		})
+
+		It("does not block deletion when the cluster is gone", func() {
+			nn := newUser("cleanup-orphan-user", "no-such-cluster")
+			deleteAndReconcile(nn, func(_ context.Context, _ string, _ ...string) (string, error) {
+				Fail("no Riak command may run without a cluster")
+				return "", nil
+			})
+			Expect(finalizerPresent(nn)).To(BeFalse())
 		})
 	})
 

@@ -260,24 +260,60 @@ func (e *Executor) GrantPermission(ctx context.Context, namespace, podName, cont
 // are de-duplicated with a stable order so the pod template / command is
 // deterministic.
 func (e *Executor) GrantPermissions(ctx context.Context, namespace, podName, containerName, username, resource, bucket string, permissions []string) error {
-	// Resolve the grant target. A "bucket" resource with an empty bucket must
-	// NOT fall through to "on any" — that would silently grant cluster-wide
-	// access. Reject it, and reject unknown resources, instead.
-	var target []string
+	target, err := grantTarget(resource, bucket)
+	if err != nil {
+		return err
+	}
+	args := []string{"security", "grant", strings.Join(permissionTokens(permissions), ","), "on"}
+	args = append(args, target...)
+	args = append(args, "to", username)
+	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
+	return err
+}
+
+// RevokePermissions removes permissions from a user on a grant target, the
+// inverse of GrantPermissions.
+func (e *Executor) RevokePermissions(ctx context.Context, namespace, podName, containerName, username, resource, bucket string, tokens []string) error {
+	target, err := grantTarget(resource, bucket)
+	if err != nil {
+		return err
+	}
+	args := []string{"security", "revoke", strings.Join(tokens, ","), "on"}
+	args = append(args, target...)
+	args = append(args, "from", username)
+	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
+	return err
+}
+
+// DeleteUser removes a Riak user together with its grants and sources.
+func (e *Executor) DeleteUser(ctx context.Context, namespace, podName, containerName, username string) error {
+	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "del-user", username)
+	return err
+}
+
+// grantTarget resolves the `on ...` target of a grant. A "bucket" resource with an
+// empty bucket must NOT fall through to "on any" — that would silently grant
+// cluster-wide access. Reject it, and reject unknown resources, instead.
+func grantTarget(resource, bucket string) ([]string, error) {
 	switch resource {
 	case "any":
-		target = []string{"any"}
+		return []string{"any"}, nil
 	case "bucket":
 		// strings.Fields also collapses a whitespace-only bucket to an empty
 		// target, so validate the parsed result rather than the raw string.
-		target = strings.Fields(bucket)
+		target := strings.Fields(bucket)
 		if len(target) == 0 {
-			return fmt.Errorf("bucket grant requires a bucket target")
+			return nil, fmt.Errorf("bucket grant requires a bucket target")
 		}
+		return target, nil
 	default:
-		return fmt.Errorf("unknown grant resource %q", resource)
+		return nil, fmt.Errorf("unknown grant resource %q", resource)
 	}
+}
 
+// permissionTokens expands CRD permissions into the distinct riak_kv permission
+// tokens they stand for, in first-seen order.
+func permissionTokens(permissions []string) []string {
 	seen := map[string]bool{}
 	var tokens []string
 	for _, p := range permissions {
@@ -288,10 +324,60 @@ func (e *Executor) GrantPermissions(ctx context.Context, namespace, podName, con
 			}
 		}
 	}
+	return tokens
+}
 
-	args := []string{"security", "grant", strings.Join(tokens, ","), "on"}
-	args = append(args, target...)
-	args = append(args, "to", username)
-	_, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
-	return err
+// GrantEntry is one row of a user's dedicated permissions as Riak reports them.
+type GrantEntry struct {
+	Type   string // bucket type, or "*" for `on any`
+	Bucket string // bucket, or "*" for the whole type
+	Tokens []string
+}
+
+// GetUserGrants returns the user's dedicated (directly granted) permissions.
+func (e *Executor) GetUserGrants(ctx context.Context, namespace, podName, containerName, username string) ([]GrantEntry, error) {
+	out, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "security", "print-grants", username)
+	if err != nil {
+		return nil, err
+	}
+	return parseDedicatedGrants(out), nil
+}
+
+// parseDedicatedGrants reads the "Dedicated permissions" table of print-grants.
+// Long permission lists wrap onto continuation rows with an empty type column.
+func parseDedicatedGrants(output string) []GrantEntry {
+	var entries []GrantEntry
+	inSection := false
+	for _, line := range strings.Split(output, "\n") {
+		switch {
+		case strings.HasPrefix(line, "Dedicated permissions"):
+			inSection = true
+			continue
+		case strings.HasPrefix(line, "Cumulative permissions"):
+			return entries
+		case !inSection || !strings.HasPrefix(line, "|"):
+			continue
+		}
+		cols := strings.Split(strings.Trim(line, "|"), "|")
+		if len(cols) != 3 {
+			continue
+		}
+		typ, bucket := strings.TrimSpace(cols[0]), strings.TrimSpace(cols[1])
+		if typ == "type" { // header row
+			continue
+		}
+		var tokens []string
+		for _, t := range strings.Split(cols[2], ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				tokens = append(tokens, t)
+			}
+		}
+		if typ == "" && len(entries) > 0 { // continuation of the previous row
+			last := &entries[len(entries)-1]
+			last.Tokens = append(last.Tokens, tokens...)
+			continue
+		}
+		entries = append(entries, GrantEntry{Type: typ, Bucket: bucket, Tokens: tokens})
+	}
+	return entries
 }

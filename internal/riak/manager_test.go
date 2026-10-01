@@ -110,14 +110,14 @@ func TestGrantUserPermissions_noMembers(t *testing.T) {
 }
 
 func TestGrantUserPermissions_empty(t *testing.T) {
-	runner, calls := mockRunner(nil, nil)
+	runner, calls := mockRunner(map[string]string{"print-grants": "ok\n"}, nil)
 	m := newManager(runner)
-	// No grants: nothing to do, and no cluster-member requirement.
-	if err := m.GrantUserPermissions(context.Background(), emptyCluster(), "alice", nil); err != nil {
+	// No grants and nothing granted in Riak: only the current grants are read.
+	if err := m.GrantUserPermissions(context.Background(), clusterWithMembers("pod-0"), "alice", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(*calls) != 0 {
-		t.Errorf("expected no calls, got %d", len(*calls))
+	if len(*calls) != 1 || !strings.Contains(strings.Join((*calls)[0].args, " "), "print-grants alice") {
+		t.Errorf("expected a single print-grants read, got %+v", *calls)
 	}
 }
 
@@ -134,8 +134,9 @@ func TestGrantUserPermissions_batchesByTarget(t *testing.T) {
 	if err := m.GrantUserPermissions(context.Background(), clusterWithMembers("pod-0"), "alice", grants); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(*calls) != 2 {
-		t.Fatalf("expected 2 batched calls, got %d", len(*calls))
+	// Two grant calls plus one read of the current grants (to revoke stale ones).
+	if len(*calls) != 3 {
+		t.Fatalf("expected 3 calls (2 grants + print-grants), got %d", len(*calls))
 	}
 	anyCall := strings.Join((*calls)[0].args, " ")
 	if !strings.Contains(anyCall, "security grant riak_kv.get,riak_kv.put on any to alice") {
@@ -426,5 +427,190 @@ func TestParseMemberStatus(t *testing.T) {
 	}
 	if got := parseMemberStatus("garbage\nnot riak@x a b\n"); len(got) != 0 {
 		t.Fatalf("expected no members, got %+v", got)
+	}
+}
+
+// ---------- grants reconciliation ----------
+
+const printGrantsTable = `Dedicated permissions (user/u1)
+
++---------------+----------+----------------------------------------+
+|     type      |  bucket  |                 grants                 |
++---------------+----------+----------------------------------------+
+|scale-c000-t001|bucket-005|              riak_kv.put               |
+|       *       |    *     |              riak_kv.get               |
+|scale-c000-t002|    *     |      riak_kv.get, riak_kv.delete,      |
+|               |          |         riak_kv.list_buckets,          |
+|               |          |     riak_kv.put, riak_kv.list_keys     |
++---------------+----------+----------------------------------------+
+
+Cumulative permissions (user/u1)
+
++---------------+----------+----------------------------------------+
+|     type      |  bucket  |                 grants                 |
++---------------+----------+----------------------------------------+
+|ignored        |    *     |              riak_kv.get               |
++---------------+----------+----------------------------------------+
+`
+
+func TestParseDedicatedGrants(t *testing.T) {
+	got := parseDedicatedGrants(printGrantsTable)
+	if len(got) != 3 {
+		t.Fatalf("want 3 entries (cumulative section ignored), got %+v", got)
+	}
+	if got[0].Type != "scale-c000-t001" || got[0].Bucket != "bucket-005" || len(got[0].Tokens) != 1 {
+		t.Errorf("unexpected first entry: %+v", got[0])
+	}
+	if got[1].Type != "*" || got[1].Bucket != "*" {
+		t.Errorf("`on any` must parse as * *, got %+v", got[1])
+	}
+	if len(got[2].Tokens) != 5 {
+		t.Errorf("wrapped rows must merge into one entry with 5 tokens, got %+v", got[2])
+	}
+	if len(parseDedicatedGrants("ok\n")) != 0 {
+		t.Error("output without a table must yield no entries")
+	}
+}
+
+func TestGrantKey(t *testing.T) {
+	cases := []struct{ resource, bucket, want string }{
+		{"any", "", "* *"},
+		{"bucket", "t1", "t1 *"},
+		{"bucket", "t1 b1", "t1 b1"},
+	}
+	for _, c := range cases {
+		got, err := grantKey(c.resource, c.bucket)
+		if err != nil || got != c.want {
+			t.Errorf("grantKey(%q,%q) = %q, %v; want %q", c.resource, c.bucket, got, err, c.want)
+		}
+	}
+	if _, err := grantKey("bucket", "  "); err == nil {
+		t.Error("an empty bucket target must be rejected")
+	}
+}
+
+func TestGrantUserPermissions_revokesStaleGrants(t *testing.T) {
+	var cmds []string
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		cmds = append(cmds, joined)
+		if strings.Contains(joined, "print-grants") {
+			return printGrantsTable, nil
+		}
+		return "", nil
+	}
+	// Spec keeps only: read on type scale-c000-t002. Everything else in Riak is stale.
+	err := newMembershipManager(runner).GrantUserPermissions(context.Background(), clusterWithMembers("riak-0"), "u1",
+		[]riakv1.Grant{{Resource: "bucket", BucketName: "scale-c000-t002", Permission: "read"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var revokes []string
+	for _, c := range cmds {
+		if strings.Contains(c, "security revoke") {
+			revokes = append(revokes, c[strings.Index(c, "security revoke"):])
+		}
+	}
+	want := []string{
+		"security revoke riak_kv.put on scale-c000-t001 bucket-005 from u1",
+		"security revoke riak_kv.get on any from u1",
+		"security revoke riak_kv.delete,riak_kv.list_buckets,riak_kv.put,riak_kv.list_keys on scale-c000-t002 from u1",
+	}
+	if strings.Join(revokes, "\n") != strings.Join(want, "\n") {
+		t.Errorf("revokes:\n%s\nwant:\n%s", strings.Join(revokes, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestGrantUserPermissions_nothingStaleNoRevoke(t *testing.T) {
+	var cmds []string
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		cmds = append(cmds, joined)
+		if strings.Contains(joined, "print-grants") {
+			return printGrantsTable, nil
+		}
+		return "", nil
+	}
+	err := newMembershipManager(runner).GrantUserPermissions(context.Background(), clusterWithMembers("riak-0"), "u1",
+		[]riakv1.Grant{
+			{Resource: "bucket", BucketName: "scale-c000-t001 bucket-005", Permission: "write"},
+			{Resource: "any", Permission: "read"},
+			{Resource: "bucket", BucketName: "scale-c000-t002", Permission: "admin"},
+		})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, c := range cmds {
+		if strings.Contains(c, "security revoke") {
+			t.Errorf("grants already match the spec, nothing may be revoked: %s", c)
+		}
+	}
+}
+
+func TestGrantUserPermissions_emptySpecRevokesAll(t *testing.T) {
+	var revokes int
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "print-grants") {
+			return printGrantsTable, nil
+		}
+		if strings.Contains(joined, "security revoke") {
+			revokes++
+		}
+		return "", nil
+	}
+	if err := newMembershipManager(runner).GrantUserPermissions(
+		context.Background(), clusterWithMembers("riak-0"), "u1", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if revokes != 3 {
+		t.Errorf("an empty spec must revoke every grant, got %d revokes", revokes)
+	}
+}
+
+func TestGrantUserPermissions_errors(t *testing.T) {
+	ok := func(_ context.Context, _ string, _ ...string) (string, error) { return "", nil }
+	if err := newMembershipManager(ok).GrantUserPermissions(context.Background(), membershipCluster(), "u1", nil); err == nil {
+		t.Error("expected an error without cluster members")
+	}
+	if err := newMembershipManager(ok).GrantUserPermissions(context.Background(), clusterWithMembers("riak-0"), "u1",
+		[]riakv1.Grant{{Resource: "bucket", Permission: "read"}}); err == nil {
+		t.Error("expected an error for a bucket grant without a target")
+	}
+	fail := func(cmd string) func(context.Context, string, ...string) (string, error) {
+		return func(_ context.Context, _ string, args ...string) (string, error) {
+			if strings.Contains(strings.Join(args, " "), cmd) {
+				return "", errors.New("boom")
+			}
+			if strings.Contains(strings.Join(args, " "), "print-grants") {
+				return printGrantsTable, nil
+			}
+			return "", nil
+		}
+	}
+	spec := []riakv1.Grant{{Resource: "any", Permission: "read"}}
+	for _, cmd := range []string{"security grant", "print-grants", "security revoke"} {
+		if err := newMembershipManager(fail(cmd)).GrantUserPermissions(
+			context.Background(), clusterWithMembers("riak-0"), "u1", spec); err == nil {
+			t.Errorf("expected an error when %q fails", cmd)
+		}
+	}
+}
+
+func TestDeleteUser(t *testing.T) {
+	var got string
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		got = strings.Join(args, " ")
+		return "", nil
+	}
+	m := newMembershipManager(runner)
+	if err := m.DeleteUser(context.Background(), clusterWithMembers("riak-0"), "u1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(got, "security del-user u1") {
+		t.Errorf("expected del-user, ran %q", got)
+	}
+	if err := m.DeleteUser(context.Background(), membershipCluster(), "u1"); err == nil {
+		t.Error("expected an error without cluster members")
 	}
 }
