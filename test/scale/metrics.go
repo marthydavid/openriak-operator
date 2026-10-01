@@ -28,7 +28,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -126,7 +125,7 @@ func verifyMetrics(ctx context.Context, c client.Client, o opts) ([]string, erro
 		if !cl.Status.MonitoringStatus.Enabled || !cl.Status.MonitoringStatus.ExporterReady {
 			fail("%s: monitoringStatus not ready (%+v)", cl.Name, cl.Status.MonitoringStatus)
 		}
-		if p := serviceMonitorSelects(ctx, c, cl); p != "" {
+		if p := scrapeObjectProblem(ctx, c, cl); p != "" {
 			fail("%s: %s", cl.Name, p)
 		}
 		for i := int32(0); i < cl.Spec.Size; i++ {
@@ -152,35 +151,65 @@ func verifyMetrics(ctx context.Context, c client.Client, o opts) ([]string, erro
 	return problems, nil
 }
 
-// serviceMonitorSelects checks what Prometheus would do: the cluster's
-// ServiceMonitor selector must match a Service that exposes the metrics port.
-// A skipped ServiceMonitor (no Prometheus Operator CRDs) is not a problem.
-func serviceMonitorSelects(ctx context.Context, c client.Client, cl riakv1.RiakCluster) string {
-	sm := &unstructured.Unstructured{}
-	sm.SetGroupVersionKind(schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"})
-	if err := c.Get(ctx, client.ObjectKey{Namespace: cl.Namespace, Name: cl.Name + "-metrics"}, sm); err != nil {
-		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+// scrapeObjectProblem checks what Prometheus would do for the cluster's scrape
+// object (spec.monitoring.scrapeKind, PodMonitor by default): its selector must
+// match something that exposes the metrics port. "" means fine; a skipped
+// object (no Prometheus Operator CRDs) or scrapeKind None is not a problem.
+func scrapeObjectProblem(ctx context.Context, c client.Client, cl riakv1.RiakCluster) string {
+	kind := cl.Status.MonitoringStatus.ScrapeKind
+	if kind == "" {
+		kind = riakv1.ScrapeKindPodMonitor
+	}
+	if kind == riakv1.ScrapeKindNone {
+		return ""
+	}
+	mon := &unstructured.Unstructured{}
+	mon.SetGroupVersionKind(schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: kind})
+	if err := c.Get(ctx, client.ObjectKey{Namespace: cl.Namespace, Name: cl.Name + "-metrics"}, mon); err != nil {
+		if meta.IsNoMatchError(err) {
 			return ""
 		}
-		return fmt.Sprintf("get ServiceMonitor: %v", err)
+		return fmt.Sprintf("get %s: %v", kind, err)
 	}
-	match, _, _ := unstructured.NestedStringMap(sm.Object, "spec", "selector", "matchLabels")
+	match, _, _ := unstructured.NestedStringMap(mon.Object, "spec", "selector", "matchLabels")
 	sel := labels.SelectorFromSet(match)
-	svcs := &corev1.ServiceList{}
-	if err := c.List(ctx, svcs, client.InNamespace(cl.Namespace)); err != nil {
-		return fmt.Sprintf("list Services: %v", err)
-	}
-	for _, s := range svcs.Items {
-		if !sel.Matches(labels.Set(s.Labels)) {
-			continue
+
+	if kind == riakv1.ScrapeKindServiceMonitor {
+		svcs := &corev1.ServiceList{}
+		if err := c.List(ctx, svcs, client.InNamespace(cl.Namespace)); err != nil {
+			return fmt.Sprintf("list Services: %v", err)
 		}
-		for _, p := range s.Spec.Ports {
-			if p.Name == "metrics" {
-				return ""
+		for _, s := range svcs.Items {
+			if !sel.Matches(labels.Set(s.Labels)) {
+				continue
+			}
+			for _, p := range s.Spec.Ports {
+				if p.Name == "metrics" {
+					return ""
+				}
+			}
+		}
+		return fmt.Sprintf("ServiceMonitor selector %v matches no Service with a metrics port: no targets", match)
+	}
+
+	pods := &corev1.PodList{}
+	if err := c.List(ctx, pods, client.InNamespace(cl.Namespace), client.MatchingLabelsSelector{Selector: sel}); err != nil {
+		return fmt.Sprintf("list Pods: %v", err)
+	}
+	targets := 0
+	for _, p := range pods.Items {
+		for _, ct := range p.Spec.Containers {
+			for _, port := range ct.Ports {
+				if port.Name == "metrics" {
+					targets++
+				}
 			}
 		}
 	}
-	return fmt.Sprintf("ServiceMonitor selector %v matches no Service with a metrics port: no targets", match)
+	if int32(targets) != cl.Spec.Size {
+		return fmt.Sprintf("PodMonitor selector %v matches %d pods with a metrics port, want %d", match, targets, cl.Spec.Size)
+	}
+	return ""
 }
 
 // verifyMetricsEventually retries verifyMetrics: exporters start after Riak

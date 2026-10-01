@@ -64,6 +64,7 @@ type opts struct {
 	ephemeral  bool
 	replicas   int
 	monitoring bool
+	scrapeKind string
 
 	verify      bool
 	verifyOnly  bool
@@ -89,6 +90,8 @@ func main() {
 	flag.IntVar(&o.replicas, "replicas", 1, "Riak nodes per RiakCluster (spec.size)")
 	flag.BoolVar(&o.monitoring, "monitoring", false,
 		"enable spec.monitoring (json_exporter sidecar) on every cluster and verify the riak_* metrics on every node")
+	flag.StringVar(&o.scrapeKind, "scrape-kind", "",
+		"with -monitoring: spec.monitoring.scrapeKind (PodMonitor, ServiceMonitor, None); default is the operator's")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
 	flag.IntVar(&o.ringSize, "ring-size", minRingSize,
@@ -334,7 +337,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 			RiakConfig: map[string]string{"ring_size": strconv.Itoa(o.ringSize)},
 		}
 		if o.monitoring {
-			spec.Monitoring = &riakv1.MonitoringConfig{Enabled: true}
+			spec.Monitoring = &riakv1.MonitoringConfig{Enabled: true, ScrapeKind: o.scrapeKind}
 		}
 		if o.ephemeral {
 			spec.EphemeralStorage = true
