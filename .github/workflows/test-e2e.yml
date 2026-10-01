@@ -3,8 +3,20 @@ name: E2E Tests
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "**.md"
+      - ".claude/**"
+      - ".github/workflows/docs.yml"
     tags: ['*']
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "**.md"
+      - ".claude/**"
+      - ".github/workflows/docs.yml"
 
 env:
   # Stable tag derived from the commit SHA — the same value used by build-operator.yml.
