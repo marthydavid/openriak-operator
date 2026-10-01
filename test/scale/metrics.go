@@ -226,3 +226,116 @@ func verifyMetricsEventually(ctx context.Context, c client.Client, o opts) error
 		time.Sleep(10 * time.Second)
 	}
 }
+
+// stat reads one series from a scrape, treating an absent series as 0.
+func stat(m map[string]float64, name string) float64 { return m[name] }
+
+// exerciseDeltas compares scrapes taken before and after one `riak-admin test`
+// cycle (one write plus reads through a single node) and returns what the
+// metrics got wrong. before/after are per-pod scrapes; coord is the pod the
+// cycle ran on.
+//
+// The write must be visible on the coordinating node (node_puts +1), the reads
+// must register (node_gets >= +1), and, because the object is replicated n_val
+// times, the vnode_puts summed over the whole cluster must rise by at least a
+// write quorum (2). That last check ties the exporter to replication across the
+// real ring: a node that only counted its own writes would fail it.
+func exerciseDeltas(before, after map[string]map[string]float64, coord string) []string {
+	var bad []string
+	if d := stat(after[coord], "riak_node_puts_total") - stat(before[coord], "riak_node_puts_total"); d != 1 {
+		bad = append(bad, fmt.Sprintf("%s: riak_node_puts_total rose by %v after one write, want 1", coord, d))
+	}
+	if d := stat(after[coord], "riak_node_gets_total") - stat(before[coord], "riak_node_gets_total"); d < 1 {
+		bad = append(bad, fmt.Sprintf("%s: riak_node_gets_total rose by %v after the reads, want >= 1", coord, d))
+	}
+	var vputs float64
+	for pod := range after {
+		vputs += stat(after[pod], "riak_vnode_puts_total") - stat(before[pod], "riak_vnode_puts_total")
+	}
+	if vputs < 2 {
+		bad = append(bad, fmt.Sprintf("riak_vnode_puts_total summed over the cluster rose by %v, want >= 2 (a write quorum)", vputs))
+	}
+	return bad
+}
+
+// scrapeCluster scrapes every pod of a cluster.
+func scrapeCluster(ns string, cl riakv1.RiakCluster) (map[string]map[string]float64, error) {
+	out := map[string]map[string]float64{}
+	for i := int32(0); i < cl.Spec.Size; i++ {
+		pod := fmt.Sprintf("%s-%d", cl.Name, i)
+		body, err := scrapeMetrics(ns, pod)
+		if err != nil {
+			return nil, err
+		}
+		out[pod] = parseMetrics(body)
+	}
+	return out, nil
+}
+
+// exerciseMetrics drives one real write/read cycle through each cluster and
+// verifies that the Riak metrics move accordingly, then prints a summary of the
+// key series for every node. Nothing else in the scale test sends data, so
+// without this the traffic counters would only ever be checked at zero.
+func exerciseMetrics(ctx context.Context, c client.Client, o opts) error {
+	fmt.Println("\n── exercising Riak and verifying the metrics move ──")
+	clusters := &riakv1.RiakClusterList{}
+	if err := c.List(ctx, clusters, client.InNamespace(o.namespace)); err != nil {
+		return err
+	}
+	sort.Slice(clusters.Items, func(i, j int) bool { return clusters.Items[i].Name < clusters.Items[j].Name })
+	var failures []string
+	for _, cl := range clusters.Items {
+		before, err := scrapeCluster(o.namespace, cl)
+		if err != nil {
+			return err
+		}
+		coord := cl.Name + "-0"
+		if out, err := riakAdmin(o.namespace, coord, "test"); err != nil || !strings.Contains(out, "Successfully completed") {
+			failures = append(failures, fmt.Sprintf("%s: riak-admin test failed: %v %s", cl.Name, err, strings.TrimSpace(out)))
+			continue
+		}
+		var after map[string]map[string]float64
+		var bad []string
+		for attempt := 0; attempt < 12; attempt++ { // replication to the other vnodes is asynchronous
+			after, err = scrapeCluster(o.namespace, cl)
+			if err != nil {
+				return err
+			}
+			if bad = exerciseDeltas(before, after, coord); len(bad) == 0 {
+				break
+			}
+			time.Sleep(5 * time.Second)
+		}
+		failures = append(failures, bad...)
+		printMetricsSummary(cl.Name, before, after)
+	}
+	if len(failures) > 0 {
+		for _, f := range failures {
+			fmt.Println("  METRICS:", f)
+		}
+		return fmt.Errorf("%d metrics problems after exercising Riak", len(failures))
+	}
+	fmt.Println("METRICS OK: the counters moved as expected on the coordinating node and across the replicas")
+	return nil
+}
+
+// printMetricsSummary prints the key series per node, with the change caused by
+// the exercised write for the traffic counters.
+func printMetricsSummary(cluster string, before, after map[string]map[string]float64) {
+	pods := make([]string, 0, len(after))
+	for p := range after {
+		pods = append(pods, p)
+	}
+	sort.Strings(pods)
+	fmt.Printf("  %s\n", cluster)
+	for _, p := range pods {
+		a, b := after[p], before[p]
+		fmt.Printf("    %-13s partitions=%-4.0f vnode_puts=%.0f(+%.0f) vnode_gets=%.0f(+%.0f) node_puts=%.0f(+%.0f) node_gets=%.0f(+%.0f) mem=%.0fMiB procs=%.0f pbc_active=%.0f\n",
+			p, a["riak_ring_num_partitions"],
+			a["riak_vnode_puts_total"], a["riak_vnode_puts_total"]-b["riak_vnode_puts_total"],
+			a["riak_vnode_gets_total"], a["riak_vnode_gets_total"]-b["riak_vnode_gets_total"],
+			a["riak_node_puts_total"], a["riak_node_puts_total"]-b["riak_node_puts_total"],
+			a["riak_node_gets_total"], a["riak_node_gets_total"]-b["riak_node_gets_total"],
+			a["riak_memory_system"]/(1<<20), a["riak_sys_process_count"], a["riak_pbc_active"])
+	}
+}
