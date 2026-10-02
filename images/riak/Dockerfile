@@ -3,7 +3,7 @@
 #
 # Upstream ships x86_64 RPMs for RHEL and aarch64 RPMs only as Amazon Linux
 # Graviton builds, so the two architectures use different bases:
-#   amd64 -> Red Hat UBI + el RPM (EPEL provides the erlang-erts dependency)
+#   amd64 -> Red Hat UBI + el RPM (installed --nodeps, bundled escript symlinked)
 #   arm64 -> Amazon Linux + Graviton RPM (installed --nodeps: the escript
 #            dependency is unsatisfiable there; Riak bundles its own ERTS)
 #
@@ -27,18 +27,17 @@ ARG RHEL_VERSION
 ARG AMD64_RPM_URL=https://files.tiot.jp/riak/kv/3.2/3.2.6/rhel/8/riak-3.2.6.OTP24-1.el8.x86_64.rpm
 ARG AMD64_RPM_SHA256=63363abccafe83db9d440a9968dc436a0cd2753d0665093aff6d1a556f3e2c05
 
-# EPEL satisfies the /usr/bin/escript dependency declared by the Riak RPM spec
-# (provided by erlang-erts). Riak bundles its own OTP runtime; erlang-erts is
-# only needed for the RPM dependency check. procps-ng: `ps` for riak scripts.
-RUN dnf install -y \
-        "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${RHEL_VERSION}.noarch.rpm" \
-    && dnf install -y \
-        procps-ng \
-        erlang-erts \
+# The Riak RPM declares a dependency on /usr/bin/escript (normally from erlang-erts in EPEL).
+# Riak bundles its own OTP runtime, so install with --nodeps and point escript at the bundled
+# one, exactly like the arm64 stage. This removes the build's dependency on EPEL, whose
+# unversioned epel-release-latest-8 link started returning 404 once EPEL 8 was archived.
+# procps-ng: `ps` for riak scripts.
+RUN dnf install -y procps-ng \
     && curl -fsSLo /tmp/riak.rpm "${AMD64_RPM_URL}" \
     && echo "${AMD64_RPM_SHA256}  /tmp/riak.rpm" | sha256sum -c - \
-    && dnf install -y /tmp/riak.rpm \
+    && rpm -ivh --nodeps /tmp/riak.rpm \
     && rm -f /tmp/riak.rpm \
+    && ln -sf /usr/lib64/riak/erts-*/bin/escript /usr/bin/escript \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
