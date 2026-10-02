@@ -1,14 +1,72 @@
 # Release notes
 
-## Unreleased
+## Operator 0.0.11 / chart 0.1.9
 
-!!! warning "One-time rolling restart on upgrade"
-    The Riak pod anti-affinity now selects only Riak pods (`app=riak,cluster=<name>`) instead of every pod
-    labelled `cluster=<name>`, so unrelated pods with that label are no longer kept off the nodes that host
-    a cluster. The anti-affinity is part of the StatefulSet pod template, so **upgrading the operator rolls
-    every existing RiakCluster once**: its pods restart one at a time (StatefulSet RollingUpdate) and
-    rejoin the ring with their data volumes. Plan the upgrade for a quiet period if a cluster is
-    sensitive to a node restart ([#58](https://github.com/marthydavid/openriak-operator/issues/58)).
+Fixes an intermittent **Riak crash-loop on first start**, and stops the Riak pod anti-affinity from keeping
+unrelated pods off your nodes. **Upgrading restarts every existing RiakCluster once** (see below).
+
+!!! warning "Upgrading rolls every RiakCluster once"
+    The Riak pod anti-affinity is part of the StatefulSet pod template, so changing it makes every
+    existing cluster restart its pods **one at a time** (StatefulSet rolling update, highest ordinal first,
+    so the seed node `<cluster>-0` goes last) when the operator is upgraded. Restarted pods keep their data
+    volumes and rejoin the ring. On OpenShift (3-node clusters under constant client load) this took about
+    80 seconds per cluster, the rings stayed complete, no container crashed and a final read-back of every
+    written key found nothing lost or corrupt. Reads that arrive while a node is restarting can return a
+    value that is briefly missing or stale: that is Riak's normal behavior under node loss with the default
+    quorum settings. Plan the upgrade for a quiet period if a cluster is sensitive to a node restart
+    ([#58](https://github.com/marthydavid/openriak-operator/issues/58)). No CRD changes: a plain
+    `helm upgrade` is enough.
+
+!!! note "Pick up the rebuilt Riak image"
+    The entrypoint fix below ships in the Riak image, and the existing tags (`3.0.16`, `3.2.6`, `3.4.0`) were
+    rebuilt with it. A pod only gets it when it pulls the image: with the default `imagePullPolicy:
+    IfNotPresent` a node that already has `3.2.6` cached keeps using the old one. Pin the image by digest, or
+    set `spec.imagePullPolicy: Always`, and let the pods restart.
+
+### Fixes
+
+- **A Riak node could name itself after its short host name and then crash-loop forever**
+  ([#59](https://github.com/marthydavid/openriak-operator/issues/59)). The kubelet rewrites a pod's
+  `/etc/hosts` each time it creates another container of the pod, and with `spec.monitoring` the
+  `metrics-exporter` sidecar is created right after the `riak` container starts. The entrypoint read the
+  file once, could see it empty, fell back to `riak@<pod>`, and the ring that node then persisted on its
+  volume under that name made every later start (under the real name) crash with
+  `riak_core_capability ... orddict:fetch`. The entrypoint now retries the lookup, falls back to the pod's name
+  in the headless Service and the DNS search domain, and **refuses to start** rather than use a short name.
+  Before starting it checks that the persisted ring lists this node: a one-member ring of another name is moved
+  aside to `ring.stale-<time>` (the vnode data is kept and Riak starts a fresh ring under the right name), and a
+  ring with several members is refused with recovery instructions. The logs of the last five failed starts are
+  kept under `/var/lib/riak/crash-logs/` and printed on the next start, so the first failure is no longer
+  overwritten. See [Troubleshooting](troubleshooting.md).
+- **`riak-admin` answers "Node ... is not responding to pings" with exit status 0**, and the operator took
+  that for success (for example an empty member list). It is now treated as a failure, so these problems
+  surface instead of passing silently.
+- **Riak pods no longer keep unrelated pods off their nodes**
+  ([#58](https://github.com/marthydavid/openriak-operator/issues/58)). The required anti-affinity selected
+  every pod labelled `cluster=<name>`; it now selects only Riak pods (`app=riak,cluster=<name>`). Clusters
+  created by older operators keep the old selector until they roll, which this upgrade does.
+
+### Changes you may notice
+
+- When you run `riak-admin` by hand in a pod, set `VMARGS_PATH` to the newest generated `vm.args`; a bare
+  `riak-admin` reports "not responding to pings" even on a healthy node. The README and the troubleshooting page
+  show the command.
+
+### Test tooling and docs
+
+- `test/scale` has a `-stress` option and ships an example application (`examples/stressapp`, a stdlib-only
+  Python client speaking the Riak protocol over mTLS). It checks the clients' results and Riak's own metrics
+  against each other, and that nothing restarted. See [Stress-testing Riak](scaling.md#stress-testing-riak)
+  and [Scale test results](scale-test-results.md) ([#60](https://github.com/marthydavid/openriak-operator/pull/60)).
+- New [Test environment](test-environment.md) page describing the cluster the scale tests run on.
+
+### Images
+
+| Image | Tag |
+|---|---|
+| Operator | `ghcr.io/marthydavid/openriak-operator:0.0.11` |
+| Helm chart | `oci://ghcr.io/marthydavid/charts/openriak-operator` `0.1.9` |
+| Riak KV | `ghcr.io/marthydavid/riak:3.0.16`, `3.2.6`, `3.4.0` (rebuilt with the new entrypoint) |
 
 ## Operator 0.0.10 / chart 0.1.8
 
