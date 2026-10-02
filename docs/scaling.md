@@ -52,6 +52,13 @@ multi-node cluster to get real numbers before sizing anything.
 - **Give Riak nodes headroom** (`spec.resources`) — a single node idles around
   ~120 MB; size for your data and connection load, not for the provisioning
   path (which is light per op).
+- **Give the operator memory.** It caches the objects it watches, and a resync
+  after a restart briefly peaks well above steady state. In a 3-cluster / 9-node /
+  60-user / 60-bucket run the operator peaked around **180 MiB** just after a
+  restart, which is more than the old 128 MiB limit: it was `OOMKilled` in a loop
+  and the fleet stalled. The defaults are now a 512 MiB limit and a 128 MiB
+  request (manifest and Helm chart); keep the limit comfortably above what
+  `kubectl top pod` shows after a restart, and raise it for larger fleets.
 - **Provision gradually** where possible so serial reconciles keep up.
 - **Enable monitoring** (`spec.monitoring.enabled`) and watch the operator's
   `controller_runtime_reconcile_time_seconds` and `workqueue_depth` during
@@ -114,6 +121,7 @@ success prints `MATCH: Riak holds exactly what the CRs declare`.
 | `-verify-workers` | parallel `kubectl exec` calls while verifying (default 6) |
 | `-verify-timeout` | how long verification retries before reporting mismatches |
 | `-monitoring` | enable `spec.monitoring` on every cluster and verify the Riak metrics (see below) |
+| `-scrape-kind` | with `-monitoring`: `PodMonitor`, `ServiceMonitor` or `None` (default: the operator's) |
 
 ```bash
 go run ./test/scale -clusters 3 -users 20 -buckets 20 -replicas 3 \
@@ -129,13 +137,32 @@ created with `spec.monitoring.enabled: true`, so each Riak pod gets the
 After convergence the harness checks that:
 
 - every cluster reports `status.monitoringStatus.enabled` and `exporterReady`;
+- the cluster's PodMonitor selects every Riak pod (or its ServiceMonitor selects a Service) that exposes the `metrics` port, so Prometheus would find a target per node;
 - **every node** serves the exporter's Riak probe — scraped through the
   apiserver pod proxy (`/api/v1/namespaces/<ns>/pods/<pod>:7979/proxy/probe`),
   so no Prometheus is needed — with `riak_node_gets_total`,
   `riak_node_puts_total`, `riak_vnode_gets_total`, `riak_memory_system` and
   `riak_ring_num_partitions` present;
-- `riak_ring_num_partitions` equals the `ring_size` the harness configured,
-  which cross-checks the exporter against live Riak rather than just its shape.
+- `riak_ring_num_partitions` equals the cluster's configured `ring_size`, which
+  cross-checks the exporter against live Riak rather than just its shape;
+- the value series are plausible: memory (`riak_memory_system`,
+  `riak_memory_processes`) and `riak_sys_process_count` are above zero and no
+  series is negative.
+
+Then, because provisioning sends no data and the traffic counters would
+otherwise only ever be checked at zero, it **exercises Riak**: it runs one
+`riak-admin test` write/read cycle through the first node of each cluster, scrapes
+every node again and checks that
+
+- `riak_node_puts_total` rose by exactly 1 and `riak_node_gets_total` by at
+  least 1 on the node that took the request;
+- `riak_vnode_puts_total`, **summed over the cluster**, rose by at least a write
+  quorum (2) — the object is replicated `n_val` times, so a node that only
+  counted its own writes would fail this.
+
+It prints the key series for every node (partitions, vnode and node puts/gets with
+the change caused by the test write, memory, Erlang process count and active
+protocol-buffer connections).
 
 It retries for `-verify-timeout` and prints `METRICS OK` or `METRICS:` lines.
 It also works with `-verify-only -monitoring` against a namespace kept with

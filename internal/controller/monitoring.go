@@ -18,14 +18,17 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -154,8 +157,44 @@ const exporterConfig = `modules:
         help: Ring size
 `
 
-// reconcileMonitoringConfigMap creates or updates the json_exporter ConfigMap.
+// customMetricsConfig returns the user-supplied exporter config reference, or
+// nil when the built-in mapping is used.
+func customMetricsConfig(cluster *riakv1.RiakCluster) *corev1.ConfigMapKeySelector {
+	if cluster.Spec.Monitoring == nil || cluster.Spec.Monitoring.MetricsConfig == nil {
+		return nil
+	}
+	return &cluster.Spec.Monitoring.MetricsConfig.ConfigMapKeyRef
+}
+
+// reconcileMonitoringConfigMap prepares the exporter's config. With the built-in
+// mapping it creates or updates the operator's ConfigMap. With
+// spec.monitoring.metricsConfig it only checks that the referenced ConfigMap key
+// exists: a missing one would leave the Riak pods stuck on a volume mount, so it
+// fails the reconcile (before the StatefulSet changes) with a clear message.
 func (r *RiakClusterReconciler) reconcileMonitoringConfigMap(ctx context.Context, cluster *riakv1.RiakCluster) error {
+	if ref := customMetricsConfig(cluster); ref != nil {
+		cm := &corev1.ConfigMap{}
+		key := client.ObjectKey{Name: ref.Name, Namespace: cluster.Namespace}
+		if err := r.Get(ctx, key, cm); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("spec.monitoring.metricsConfig: ConfigMap %q not found", ref.Name)
+			}
+			return err
+		}
+		_, inData := cm.Data[ref.Key]
+		_, inBinary := cm.BinaryData[ref.Key]
+		if !inData && !inBinary {
+			return fmt.Errorf("spec.monitoring.metricsConfig: ConfigMap %q has no key %q", ref.Name, ref.Key)
+		}
+		// Drop the generated mapping left behind by an earlier built-in config.
+		stale := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Name: exporterConfigMapName(cluster.Name), Namespace: cluster.Namespace}}
+		if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		return nil
+	}
+
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      exporterConfigMapName(cluster.Name),
@@ -207,64 +246,144 @@ func exporterContainer(cluster *riakv1.RiakCluster) corev1.Container {
 	}
 }
 
-// exporterConfigVolume returns the ConfigMap volume for the sidecar.
+// exporterConfigVolume returns the ConfigMap volume for the sidecar: the
+// operator's generated mapping, or the user's key projected as config.yml.
 func exporterConfigVolume(cluster *riakv1.RiakCluster) corev1.Volume {
+	src := &corev1.ConfigMapVolumeSource{
+		LocalObjectReference: corev1.LocalObjectReference{Name: exporterConfigMapName(cluster.Name)},
+	}
+	if ref := customMetricsConfig(cluster); ref != nil {
+		src.LocalObjectReference = corev1.LocalObjectReference{Name: ref.Name}
+		src.Items = []corev1.KeyToPath{{Key: ref.Key, Path: "config.yml"}}
+	}
 	return corev1.Volume{
-		Name: "metrics-exporter-config",
-		VolumeSource: corev1.VolumeSource{
-			ConfigMap: &corev1.ConfigMapVolumeSource{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: exporterConfigMapName(cluster.Name),
-				},
-			},
-		},
+		Name:         "metrics-exporter-config",
+		VolumeSource: corev1.VolumeSource{ConfigMap: src},
 	}
 }
 
-// reconcileServiceMonitor creates or updates the Prometheus Operator
-// ServiceMonitor scraping the exporter through the client Service. Clusters
-// without the Prometheus Operator CRDs are supported: a missing ServiceMonitor
-// kind is logged and skipped, not treated as an error.
-func (r *RiakClusterReconciler) reconcileServiceMonitor(ctx context.Context, cluster *riakv1.RiakCluster) error {
-	sm := &unstructured.Unstructured{}
-	sm.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
-	})
-	sm.SetName(cluster.Name + "-metrics")
-	sm.SetNamespace(cluster.Namespace)
+// Prometheus Operator groups and kinds the operator may manage.
+var (
+	serviceMonitorGVK = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
+	podMonitorGVK     = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "PodMonitor"}
+)
 
-	// CreateOrUpdate so ServiceMonitor spec changes (e.g. port/path/interval
-	// across operator versions) propagate to existing objects, matching the
-	// ConfigMap and Service reconciles. The mutate sets the full desired spec
-	// and owner reference each time.
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sm, func() error {
-		sm.Object["spec"] = map[string]interface{}{
+// scrapeKind returns the effective spec.monitoring.scrapeKind (default PodMonitor).
+func scrapeKind(cluster *riakv1.RiakCluster) string {
+	if cluster.Spec.Monitoring == nil || cluster.Spec.Monitoring.ScrapeKind == "" {
+		return riakv1.ScrapeKindPodMonitor
+	}
+	return cluster.Spec.Monitoring.ScrapeKind
+}
+
+// scrapeObjectName is the name shared by the PodMonitor and ServiceMonitor.
+func scrapeObjectName(cluster *riakv1.RiakCluster) string { return cluster.Name + "-metrics" }
+
+// exporterEndpoint is the scrape endpoint, identical for both monitor kinds:
+// the exporter's /probe path, pointed at the pod-local Riak /stats.
+func exporterEndpoint() map[string]interface{} {
+	return map[string]interface{}{
+		"port": riakMetricsPortName,
+		"path": "/probe",
+		"params": map[string]interface{}{
+			"module": []interface{}{"riak"},
+			"target": []interface{}{riakStatsURL},
+		},
+		"interval": "30s",
+	}
+}
+
+// reconcileScrapeObject makes the cluster's Prometheus Operator scrape object
+// match spec.monitoring.scrapeKind: it creates the selected kind and removes the
+// other one (so switching kinds, or None, leaves nothing behind that would
+// double-scrape).
+func (r *RiakClusterReconciler) reconcileScrapeObject(ctx context.Context, cluster *riakv1.RiakCluster) error {
+	var err error
+	switch scrapeKind(cluster) {
+	case riakv1.ScrapeKindServiceMonitor:
+		if err = r.reconcileServiceMonitor(ctx, cluster); err == nil {
+			err = r.deleteMonitor(ctx, cluster, podMonitorGVK)
+		}
+	case riakv1.ScrapeKindNone:
+		if err = r.deleteMonitor(ctx, cluster, serviceMonitorGVK); err == nil {
+			err = r.deleteMonitor(ctx, cluster, podMonitorGVK)
+		}
+	default:
+		if err = r.reconcilePodMonitor(ctx, cluster); err == nil {
+			err = r.deleteMonitor(ctx, cluster, serviceMonitorGVK)
+		}
+	}
+	return err
+}
+
+// reconcileServiceMonitor creates or updates the Prometheus Operator
+// ServiceMonitor scraping the exporter through the client Service (which carries
+// the app/cluster labels the selector matches).
+func (r *RiakClusterReconciler) reconcileServiceMonitor(ctx context.Context, cluster *riakv1.RiakCluster) error {
+	return r.reconcileMonitor(ctx, cluster, serviceMonitorGVK, "endpoints")
+}
+
+// reconcilePodMonitor creates or updates the Prometheus Operator PodMonitor
+// selecting the Riak pods directly by their app/cluster labels. Unlike a
+// ServiceMonitor it does not depend on Service labels or endpoints.
+func (r *RiakClusterReconciler) reconcilePodMonitor(ctx context.Context, cluster *riakv1.RiakCluster) error {
+	return r.reconcileMonitor(ctx, cluster, podMonitorGVK, "podMetricsEndpoints")
+}
+
+// reconcileMonitor creates or updates a monitor of the given kind. Clusters
+// without the Prometheus Operator CRDs are supported: a missing kind is logged
+// and skipped, not treated as an error. CreateOrUpdate so spec changes propagate
+// to existing objects; the mutate sets the full desired spec and owner reference.
+func (r *RiakClusterReconciler) reconcileMonitor(
+	ctx context.Context, cluster *riakv1.RiakCluster, gvk schema.GroupVersionKind, endpointsField string,
+) error {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetName(scrapeObjectName(cluster))
+	obj.SetNamespace(cluster.Namespace)
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+		spec := map[string]interface{}{
 			"selector": map[string]interface{}{
 				"matchLabels": map[string]interface{}{
 					"app":     "riak",
 					"cluster": cluster.Name,
 				},
 			},
-			"endpoints": []interface{}{
-				map[string]interface{}{
-					"port": riakMetricsPortName,
-					"path": "/probe",
-					"params": map[string]interface{}{
-						"module": []interface{}{"riak"},
-						"target": []interface{}{riakStatsURL},
-					},
-					"interval": "30s",
-				},
-			},
+			endpointsField: []interface{}{exporterEndpoint()},
 		}
-		return controllerutil.SetControllerReference(cluster, sm, r.Scheme)
+		// Copy the cluster label onto the series so dashboards and alerts can
+		// group by cluster, whichever monitor kind is used.
+		if gvk == podMonitorGVK {
+			spec["podTargetLabels"] = []interface{}{"cluster"}
+		} else {
+			spec["targetLabels"] = []interface{}{"cluster"}
+		}
+		obj.Object["spec"] = spec
+		return controllerutil.SetControllerReference(cluster, obj, r.Scheme)
 	})
 
 	// A missing Prometheus Operator CRD surfaces as a NoMatchError from the
 	// CreateOrUpdate Get; treat it as "no scraping configured", not a failure.
 	if meta.IsNoMatchError(err) {
-		log.FromContext(ctx).Info("Prometheus Operator CRDs not installed; skipping ServiceMonitor",
+		log.FromContext(ctx).Info("Prometheus Operator CRDs not installed; skipping "+gvk.Kind,
 			"cluster", cluster.Name)
+		return nil
+	}
+	return err
+}
+
+// deleteMonitor removes the cluster's monitor of the given kind if it exists.
+// Absent objects and absent CRDs are fine.
+func (r *RiakClusterReconciler) deleteMonitor(
+	ctx context.Context, cluster *riakv1.RiakCluster, gvk schema.GroupVersionKind,
+) error {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetName(scrapeObjectName(cluster))
+	obj.SetNamespace(cluster.Namespace)
+	err := r.Delete(ctx, obj)
+	if err == nil || apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
 		return nil
 	}
 	return err

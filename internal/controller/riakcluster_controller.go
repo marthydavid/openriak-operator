@@ -73,6 +73,7 @@ type RiakClusterReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile moves the current state of the cluster closer to the desired state.
 func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -140,11 +141,12 @@ func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// Create the ServiceMonitor when monitoring is on. Missing Prometheus
-	// Operator CRDs are tolerated (logged and skipped, not an error).
+	// Create the PodMonitor/ServiceMonitor (spec.monitoring.scrapeKind) when
+	// monitoring is on. Missing Prometheus Operator CRDs are tolerated (logged
+	// and skipped, not an error).
 	if monitoringEnabled(cluster) {
-		if err := r.reconcileServiceMonitor(ctx, cluster); err != nil {
-			log.Error(err, "failed to reconcile ServiceMonitor")
+		if err := r.reconcileScrapeObject(ctx, cluster); err != nil {
+			log.Error(err, "failed to reconcile scrape object")
 			return ctrl.Result{}, err
 		}
 	}
@@ -760,7 +762,7 @@ func (r *RiakClusterReconciler) tlsStatus(ctx context.Context, cluster *riakv1.R
 }
 
 // monitoringStatus reports the observed state of the metrics exporter sidecar and
-// its ServiceMonitor.
+// its PodMonitor/ServiceMonitor.
 func (r *RiakClusterReconciler) monitoringStatus(ctx context.Context, cluster *riakv1.RiakCluster, pods []corev1.Pod) riakv1.MonitoringStatus {
 	if !monitoringEnabled(cluster) {
 		return riakv1.MonitoringStatus{}
@@ -783,12 +785,21 @@ func (r *RiakClusterReconciler) monitoringStatus(ctx context.Context, cluster *r
 		status.ExporterError = "no Riak pods exist yet"
 	}
 
-	sm := &unstructured.Unstructured{}
-	sm.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor",
-	})
-	key := client.ObjectKey{Name: cluster.Name + "-metrics", Namespace: cluster.Namespace}
-	status.ServiceMonitorReady = r.Get(ctx, key, sm) == nil
+	status.ScrapeKind = scrapeKind(cluster)
+	var gvk schema.GroupVersionKind
+	switch status.ScrapeKind {
+	case riakv1.ScrapeKindServiceMonitor:
+		gvk = serviceMonitorGVK
+	case riakv1.ScrapeKindPodMonitor:
+		gvk = podMonitorGVK
+	}
+	if gvk.Kind != "" {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(gvk)
+		key := client.ObjectKey{Name: scrapeObjectName(cluster), Namespace: cluster.Namespace}
+		status.ScrapeObjectReady = r.Get(ctx, key, obj) == nil
+		status.ServiceMonitorReady = status.ScrapeObjectReady && gvk == serviceMonitorGVK
+	}
 
 	return status
 }

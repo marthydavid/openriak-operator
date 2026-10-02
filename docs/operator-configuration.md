@@ -114,9 +114,11 @@ Any other riak.conf key works the same way (bitcask/leveldb tuning, AAE, limits,
 Riak has no native Prometheus endpoint — it exposes a JSON document at `GET /stats` on the HTTP
 port (~470 numeric fields). Enabling monitoring adds a `json_exporter` **sidecar** to every Riak
 pod that translates `/stats` into Prometheus metrics on port 7979, exposes that port on the
-cluster Service, and (when the Prometheus Operator CRDs are present) creates a `ServiceMonitor`.
-Clusters without the Prometheus Operator are supported: the ServiceMonitor is skipped, and
-Prometheus can scrape the exporter directly at
+cluster Service, and (when the Prometheus Operator CRDs are present) creates a **PodMonitor**.
+What is exported and who scrapes it are independent settings, see
+[Choosing the scrape object](#choosing-the-scrape-object) and
+[Custom exporter rules](#custom-exporter-rules). Clusters without the Prometheus Operator are
+supported: the scrape object is skipped, and Prometheus can scrape the exporter directly at
 `http://<pod>:7979/probe?module=riak&target=http://127.0.0.1:8098/stats` (the exporter's own
 `/metrics` path serves only json_exporter's internal metrics, not Riak's).
 
@@ -151,6 +153,64 @@ Or without a port-forward, through the apiserver:
 `kubectl get --raw '/api/v1/namespaces/<ns>/pods/<pod>:7979/proxy/probe?module=riak&target=http://127.0.0.1:8098/stats'`.
 `status.monitoringStatus.exporterReady` is true once every node's sidecar is ready. The
 [scale test](scaling.md#verifying-riak-metrics) automates this check across a whole fleet.
+
+### Choosing the scrape object
+
+`spec.monitoring.scrapeKind` selects what the operator creates for the Prometheus Operator:
+
+| Value | Creates | Selects |
+|-------|---------|---------|
+| `PodMonitor` (default) | `<cluster>-metrics` PodMonitor | the Riak pods (`app=riak,cluster=<name>`), port `metrics` |
+| `ServiceMonitor` | `<cluster>-metrics` ServiceMonitor | the client Service (labelled `app=riak,cluster=<name>`) |
+| `None` | nothing | bring your own, see `examples/metrics` |
+
+A PodMonitor needs no Service labels or endpoints, so it is the default; the exporter is a pod
+sidecar anyway. Both kinds copy the pod's `cluster` label onto the series. Changing `scrapeKind`
+removes the previous kind's object, so a cluster is never scraped twice. `status.monitoringStatus`
+reports `scrapeKind` and `scrapeObjectReady`. Clusters created before this field existed move to a
+PodMonitor on the next reconcile after the operator upgrade.
+
+### Custom exporter rules
+
+The built-in mapping covers about 30 of Riak's ~470 `/stats` fields. To export others, supply your
+own `json_exporter` configuration from a ConfigMap in the cluster's namespace:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-riak-rules
+data:
+  rules.yml: |
+    modules:
+      riak:
+        metrics:
+          - name: riak_node_gets_total
+            path: "{.node_gets_total}"
+            help: Total GETs coordinated by this node
+          - name: riak_leveldb_read_block_error
+            path: "{.leveldb_read_block_error}"
+            help: LevelDB block read errors
+---
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: my-cluster
+spec:
+  size: 3
+  monitoring:
+    enabled: true
+    metricsConfig:
+      configMapKeyRef:
+        name: my-riak-rules
+        key: rules.yml
+```
+
+The module must be named `riak`, since the scrape object requests `module=riak`. Your config
+replaces the built-in mapping (the operator then does not generate its own ConfigMap). The
+operator fails the reconcile with a clear message if the ConfigMap or key does not exist, rather
+than leaving the Riak pods stuck on a missing volume. The exporter reads the file at start-up, so
+restart the Riak pods after you change the ConfigMap.
 
 ## Operator metrics
 

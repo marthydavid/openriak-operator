@@ -41,8 +41,10 @@ spec:
 | `tls.enabled` | bool | `false` | Enable TLS (HTTPS + protobuf TLS) using cert-manager |
 | `tls.certManager.issuerName` | string | — | cert-manager Issuer/ClusterIssuer name |
 | `tls.certManager.issuerKind` | string | `Issuer` | `Issuer` or `ClusterIssuer` |
-| `monitoring.enabled` | bool | `false` | Add a Prometheus exporter sidecar (+ ServiceMonitor) |
+| `monitoring.enabled` | bool | `false` | Add a Prometheus exporter sidecar (and a scrape object, see `scrapeKind`) |
 | `monitoring.exporterImage` | string | operator default | Override the json_exporter image |
+| `monitoring.scrapeKind` | enum | `PodMonitor` | Prometheus Operator object the operator creates: `PodMonitor`, `ServiceMonitor` or `None` (bring your own) |
+| `monitoring.metricsConfig.configMapKeyRef` | `{name, key}` | built-in mapping | Your own json_exporter rules, from a ConfigMap in the cluster's namespace |
 | `servicePort` | int, 1024–65535 | `8087` | Port of the protobuf service |
 | `nodeSelector` | map | — | Restrict nodes the pods can schedule on |
 
@@ -144,7 +146,7 @@ kubectl get riakcluster
 | `securityEnabled` | Riak security has been enabled (done once, when the first user is created) |
 | `storageClassName`, `storageSize`, `ephemeralStorage` | The storage actually in use |
 | `tlsStatus` | `enabled`, `certManagerReady`, `certManagerError`, `interNodeReady`, `clientReady` |
-| `monitoringStatus` | `enabled`, `exporterReady`, `serviceMonitorReady`, `exporterError` |
+| `monitoringStatus` | `enabled`, `exporterReady`, `scrapeKind`, `scrapeObjectReady`, `exporterError` (`serviceMonitorReady` is deprecated) |
 | `buckets[]`, `users[]` | The RiakBuckets / RiakUsers targeting this cluster and whether they are ready |
 
 Status is recomputed from live pods, PVCs and certificates about every 10 seconds.

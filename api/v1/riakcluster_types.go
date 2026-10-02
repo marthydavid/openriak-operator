@@ -87,14 +87,45 @@ type RiakClusterSpec struct {
 // TLSConfig defines TLS settings for the cluster.
 // MonitoringConfig enables a Prometheus metrics sidecar on every Riak pod.
 // The sidecar translates Riak's JSON /stats endpoint into Prometheus metrics
-// (served on port 7979) and, when the Prometheus Operator CRDs are installed,
-// a ServiceMonitor is created to scrape it.
+// (served on port 7979). What is exported (metricsConfig) and who scrapes it
+// (scrapeKind) are independent: the operator can create a PodMonitor or a
+// ServiceMonitor for the Prometheus Operator, or nothing at all.
 type MonitoringConfig struct {
-	// Enabled turns on the metrics exporter sidecar and ServiceMonitor.
+	// Enabled turns on the metrics exporter sidecar.
 	Enabled bool `json:"enabled"`
 
 	// ExporterImage overrides the json_exporter sidecar image.
 	ExporterImage string `json:"exporterImage,omitempty"`
+
+	// MetricsConfig supplies your own json_exporter configuration (which of
+	// Riak's /stats fields become which metrics) from a ConfigMap, replacing the
+	// built-in mapping. The module must be named "riak". The exporter reads the
+	// file at start-up, so restart the Riak pods after changing the ConfigMap.
+	// +optional
+	MetricsConfig *MetricsConfigSource `json:"metricsConfig,omitempty"`
+
+	// ScrapeKind selects the Prometheus Operator object the operator creates to
+	// scrape the exporter: a PodMonitor (default; selects the Riak pods directly),
+	// a ServiceMonitor (selects the client Service), or None (bring your own, see
+	// examples/metrics). It is skipped, not an error, when the Prometheus
+	// Operator CRDs are not installed.
+	// +kubebuilder:validation:Enum=PodMonitor;ServiceMonitor;None
+	// +kubebuilder:default=PodMonitor
+	// +optional
+	ScrapeKind string `json:"scrapeKind,omitempty"`
+}
+
+// Scrape object kinds for MonitoringConfig.ScrapeKind.
+const (
+	ScrapeKindPodMonitor     = "PodMonitor"
+	ScrapeKindServiceMonitor = "ServiceMonitor"
+	ScrapeKindNone           = "None"
+)
+
+// MetricsConfigSource points at a ConfigMap key holding json_exporter rules.
+type MetricsConfigSource struct {
+	// ConfigMapKeyRef selects the key of a ConfigMap in the cluster's namespace.
+	ConfigMapKeyRef corev1.ConfigMapKeySelector `json:"configMapKeyRef"`
 }
 
 type TLSConfig struct {
@@ -197,8 +228,18 @@ type MonitoringStatus struct {
 	// ExporterReady indicates if every node's metrics exporter sidecar is ready.
 	ExporterReady bool `json:"exporterReady,omitempty"`
 
-	// ServiceMonitorReady indicates if the ServiceMonitor exists (it is skipped on
-	// clusters without the Prometheus Operator CRDs).
+	// ScrapeKind is the Prometheus Operator object the operator manages
+	// (PodMonitor, ServiceMonitor or None).
+	ScrapeKind string `json:"scrapeKind,omitempty"`
+
+	// ScrapeObjectReady indicates if that PodMonitor/ServiceMonitor exists (it is
+	// skipped on clusters without the Prometheus Operator CRDs). Always false
+	// when ScrapeKind is None.
+	ScrapeObjectReady bool `json:"scrapeObjectReady,omitempty"`
+
+	// ServiceMonitorReady indicates if the ServiceMonitor exists. Deprecated: use
+	// ScrapeObjectReady; kept for compatibility, true only for ScrapeKind
+	// ServiceMonitor.
 	ServiceMonitorReady bool `json:"serviceMonitorReady,omitempty"`
 
 	// ExporterError names the first node whose exporter is not ready, and why.
