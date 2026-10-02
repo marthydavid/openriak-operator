@@ -122,11 +122,56 @@ success prints `MATCH: Riak holds exactly what the CRs declare`.
 | `-verify-timeout` | how long verification retries before reporting mismatches |
 | `-monitoring` | enable `spec.monitoring` on every cluster and verify the Riak metrics (see below) |
 | `-scrape-kind` | with `-monitoring`: `PodMonitor`, `ServiceMonitor` or `None` (default: the operator's) |
+| `-stress` | also stress-test Riak with the example application over mTLS (see [Stress-testing Riak](#stress-testing-riak)) |
+| `-stress-duration` | timed load per client (default `1m`) |
+| `-stress-threads` / `-stress-clients` | connections per client (16) / client pods per cluster (2) |
+| `-stress-value-size` / `-stress-read-ratio` | bytes per object (1024) / fraction of reads (0.7) |
+| `-stress-max-errors` | client errors tolerated per cluster (0) |
+| `-stress-image` | image the clients run in; needs `python3` (default `registry.access.redhat.com/ubi9/python-311`) |
+| `-operator-namespace` | where the operator runs, for the restart check (default: found by label) |
 
 ```bash
 go run ./test/scale -clusters 3 -users 20 -buckets 20 -replicas 3 \
   -storage-class lvms-vg1 -mutate -delete-users-every 4 -timeout 30m
 ```
+
+### Stress-testing Riak
+
+The checks above prove the operator provisions Riak correctly. To test **Riak itself under load**, add
+`-stress`. It runs an [example application](https://github.com/marthydavid/openriak-operator/tree/main/examples/stressapp)
+(`riak_stress.py`, a stdlib-only Python client) against every cluster as Kubernetes Jobs and checks what
+happened:
+
+```bash
+go run ./test/scale -clusters 3 -users 5 -buckets 5 -replicas 3 -monitoring \
+    -stress -stress-duration 60s -stress-threads 16 -stress-clients 2
+```
+
+What `-stress` does:
+
+1. Enables TLS on the clusters with a CA-backed cert-manager `Issuer`, and adds a stress bucket and a
+   stress user (all KV permissions on the stress bucket type) per cluster. The mutate and delete stages
+   leave them alone.
+2. After the normal verification, ships the script in a ConfigMap and runs `-stress-clients` Jobs per
+   cluster. Each client opens `-stress-threads` mTLS connections with the stress user's client certificate and
+   runs a timed mix of writes and reads (`-stress-read-ratio`, `-stress-value-size`) for
+   `-stress-duration`, then reads back every key it wrote. No image is built: any image with `python3` works
+   (`-stress-image`).
+3. Checks the clients' results: **no errors** (`-stress-max-errors` to tolerate some), **no lost values, no
+   corrupt values** (every value is derived from its key and version, so each read can be verified), and
+   that writes happened.
+4. With `-monitoring`, cross-checks Riak's own metrics against what the clients did: `riak_node_puts_total`
+   must have risen by exactly the number of completed writes, `riak_node_gets_total` by the number of
+   completed reads (including the final verification pass), and `riak_vnode_puts_total` by at least a write
+   quorum (2x) of the writes: the clients and the cluster are independent observers of the same traffic.
+5. Verifies the cluster against the CRs again, and that **no Riak pod and not the operator restarted**.
+
+It prints a table per cluster (ops/s, put and get latency p50/p95/p99, errors, lost, corrupt) and ends with
+`STRESS OK` or the problems. `-verify-only -stress` runs the stress phase against an existing namespace.
+
+!!! note "Not a benchmark"
+    The client is a Python script. It is a load generator for checking correctness and behavior under
+    concurrent load, not a measurement of Riak's maximum throughput; add `-stress-clients` to push harder.
 
 ### Verifying Riak metrics
 

@@ -1,0 +1,50 @@
+# Runs examples/stressapp/riak_stress.py against the RiakCluster "demo" (see README.md).
+#
+#   kubectl create configmap riak-stress-script --from-file=examples/stressapp/riak_stress.py
+#   kubectl apply -f examples/stressapp/job.yaml
+#   kubectl logs -f job/demo-stress
+#
+# The client certificate Secret is named after the RiakUser CR: <riakuser>-client-tls.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: demo-stress
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      # Do NOT use a "cluster" label here: the Riak pods' anti-affinity selects on cluster=<name>.
+      labels: {app: riak-stress}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: stress
+          image: registry.access.redhat.com/ubi9/python-311   # any image with python3 works
+          command: ["python3"]
+          args:
+            - /app/riak_stress.py
+            - --host=demo.default.svc.cluster.local
+            - --user=demo_stress
+            - --cert=/certs/tls.crt
+            - --key=/certs/tls.key
+            - --cacert=/certs/ca.crt
+            - --bucket-type=demo-tstress
+            - --bucket=stress
+            - --threads=16
+            - --duration=60
+            - --value-size=1024
+            - --read-ratio=0.7
+          resources:
+            requests: {cpu: 500m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            seccompProfile: {type: RuntimeDefault}
+          volumeMounts:
+            - {name: certs, mountPath: /certs, readOnly: true}
+            - {name: app, mountPath: /app, readOnly: true}
+      volumes:
+        - name: certs
+          secret: {secretName: demo-stress-client-tls}
+        - name: app
+          configMap: {name: riak-stress-script, defaultMode: 0555}

@@ -28,3 +28,10 @@ go.work
 
 .claude/worktrees/
 site/
+
+# Python bytecode (the example app's tests are run with python3)
+__pycache__/
+*.pyc
+
+# `go build ./test/scale` (no -o) drops the harness binary here; build with -o instead
+/scale

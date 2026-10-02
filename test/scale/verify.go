@@ -450,6 +450,7 @@ func mutateGrants(ctx context.Context, c client.Client, o opts, rng *rand.Rand) 
 	if err := c.List(ctx, users, client.InNamespace(o.namespace)); err != nil {
 		return 0, err
 	}
+	users.Items = withoutStressUsers(users.Items)
 	sort.Slice(users.Items, func(i, j int) bool { return users.Items[i].Name < users.Items[j].Name })
 	n := 0
 	for i := range users.Items {
@@ -477,6 +478,7 @@ func mutateBuckets(ctx context.Context, c client.Client, o opts, rng *rand.Rand)
 	if err := c.List(ctx, buckets, client.InNamespace(o.namespace)); err != nil {
 		return 0, err
 	}
+	buckets.Items = withoutStressBuckets(buckets.Items)
 	sort.Slice(buckets.Items, func(i, j int) bool { return buckets.Items[i].Name < buckets.Items[j].Name })
 	n := 0
 	for i := range buckets.Items {
@@ -546,6 +548,7 @@ func deleteUsers(ctx context.Context, c client.Client, o opts, every int, timeou
 	if err := c.List(ctx, users, client.InNamespace(o.namespace)); err != nil {
 		return 0, err
 	}
+	users.Items = withoutStressUsers(users.Items)
 	sort.Slice(users.Items, func(i, j int) bool { return users.Items[i].Name < users.Items[j].Name })
 	gone := make([]string, 0, len(users.Items)/every+1)
 	for i := range users.Items {
