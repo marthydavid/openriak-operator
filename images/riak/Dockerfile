@@ -84,6 +84,13 @@ RUN mkdir -p /var/run/riak \
     && chown -R riak:0 /etc/riak /var/lib/riak /var/log/riak /var/run/riak \
     && chmod -R g=u    /etc/riak /var/lib/riak /var/log/riak /var/run/riak
 
+# Riak 3.0 has no riak-admin script: the admin CLI is `riak admin ...`. The entrypoint and the
+# operator both call riak-admin, so provide a wrapper where the RPM lacks one (3.2+ ships it).
+RUN if [ ! -e /usr/sbin/riak-admin ]; then \
+        printf '#!/bin/sh\nexec /usr/sbin/riak admin "$@"\n' > /usr/sbin/riak-admin \
+        && chmod 755 /usr/sbin/riak-admin; \
+    fi
+
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 755 /usr/local/bin/entrypoint.sh
 
