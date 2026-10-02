@@ -361,9 +361,32 @@ func TestReconcileMembership_seedNotInMemberStatus(t *testing.T) {
 	runner := func(_ context.Context, _ string, _ ...string) (string, error) {
 		return memberTable("riak@other"), nil
 	}
-	if _, err := newMembershipManager(runner).ReconcileMembership(
-		context.Background(), membershipCluster(), []string{"riak-0", "riak-1"}); err == nil {
+	_, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1"})
+	if err == nil {
 		t.Fatal("expected an error when the seed node is not listed")
+	}
+	if !strings.Contains(err.Error(), "valid riak@other") {
+		t.Errorf("error should list what the seed reported: %v", err)
+	}
+}
+
+// A seed running under a name riak-admin cannot reach (issue #59: a node that
+// came up as riak@<pod> instead of its FQDN) answers member-status with the
+// release script's "not responding to pings" and exit 0. That must surface as a
+// member-status error naming the node, not as an empty member list.
+func TestReconcileMembership_seedNotResponding(t *testing.T) {
+	runner := func(_ context.Context, _ string, _ ...string) (string, error) {
+		return "Node riak@riak-0 is not responding to pings", nil
+	}
+	_, err := newMembershipManager(runner).ReconcileMembership(
+		context.Background(), membershipCluster(), []string{"riak-0", "riak-1"})
+	if err == nil {
+		t.Fatal("expected an error when the seed does not respond")
+	}
+	if !strings.Contains(err.Error(), "member-status on seed riak-0") ||
+		!strings.Contains(err.Error(), "Node riak@riak-0 is not responding to pings") {
+		t.Errorf("error should carry riak-admin's reply: %v", err)
 	}
 }
 
