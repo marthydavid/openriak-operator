@@ -111,6 +111,44 @@ while only the node that took the request counted a client-level put, which is w
 exporter should show. The other two clusters behaved the same. Memory per node was 77–80 MiB
 and there were no active protocol-buffer connections (`pbc_active` 0).
 
+## Stress test
+
+With `-stress` the harness also tests **Riak itself under load**: it runs the
+[example stress application](https://github.com/marthydavid/openriak-operator/tree/main/examples/stressapp)
+against every cluster, over mTLS with a `RiakUser` client certificate. See
+[Stress-testing Riak](scaling.md#stress-testing-riak) for what it does and its flags.
+
+Setup: operator v0.0.10, Riak `3.2.6`, the same 3 clusters × 3 nodes, with TLS enabled on the clusters.
+Each cluster was loaded by **2 client pods × 16 connections for 60 seconds**: 1 KiB values, 70 % reads,
+30 % writes (overwriting its own keys a third of the time), then every key written was read back.
+
+| Cluster | ops/s | writes | reads | put p50 / p95 / p99 | get p50 / p95 / p99 | errors | lost | corrupt |
+|---|---|---|---|---|---|---|---|---|
+| `scale-c000` | 4,738 | 86,807 | 202,196 | 4.7 / 27.4 / 57.1 ms | 2.9 / 20.7 / 47.6 ms | 0 | 0 | 0 |
+| `scale-c001` | 4,624 | 84,723 | 197,333 | 4.8 / 29.2 / 61.0 ms | 2.9 / 22.4 / 50.5 ms | 0 | 0 | 0 |
+| `scale-c002` | 4,688 | 85,903 | 200,019 | 4.7 / 28.7 / 58.6 ms | 2.9 / 21.6 / 49.6 ms | 0 | 0 | 0 |
+
+About **257,000 writes and 600,000 reads** in the minute, with **no errors, no lost values and no corrupt
+values** (the p99 column is the worst client's). The load was applied while the clusters were shared with
+other workloads, so read the latencies as indicative.
+
+**Riak's own metrics agreed with the clients, exactly.** The clients and the Riak exporter are independent
+observers of the same traffic:
+
+| Cluster | writes done by clients | `riak_node_puts_total` rose by | reads by clients (incl. the final read-back) | `riak_node_gets_total` rose by | `riak_vnode_puts_total` rose by |
+|---|---|---|---|---|---|
+| `scale-c000` | 86,807 | 86,807 | 260,312 | 260,312 | 260,424 (about 3x, `n_val` 3) |
+| `scale-c001` | 84,723 | 84,723 | 254,008 | 254,008 | 254,169 |
+| `scale-c002` | 85,903 | 85,903 | 257,507 | 257,507 | 257,719 |
+
+Afterwards Riak still matched the CRs (945 facts), the grant and property changes and the user deletions that
+followed were applied correctly (945 and 855 facts), all 9 Riak pods had **0 restarts**, and so did the operator.
+
+!!! note "A gotcha the stress test found"
+    The first stress clients were created with the label `cluster=<name>` and could not be scheduled: the Riak
+    pods' **required anti-affinity selects on that label**, so no node was eligible. Do not label your own pods
+    `cluster=<riak cluster name>` ([Troubleshooting](troubleshooting.md#cluster)).
+
 ## What the test found
 
 Running it against a real cluster (and verifying Riak rather than trusting `status`) turned

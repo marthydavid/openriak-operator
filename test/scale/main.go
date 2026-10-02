@@ -74,8 +74,17 @@ type opts struct {
 	ringSize int
 
 	operatorNamespace string
-	verifyWorkers     int
-	verifyTimeout     time.Duration
+
+	stress          bool
+	stressDuration  time.Duration
+	stressThreads   int
+	stressClients   int
+	stressValueSize int
+	stressReadRatio float64
+	stressMaxErrors int64
+	stressImage     string
+	verifyWorkers   int
+	verifyTimeout   time.Duration
 }
 
 func main() {
@@ -96,6 +105,18 @@ func main() {
 		"with -monitoring: spec.monitoring.scrapeKind (PodMonitor, ServiceMonitor, None); default is the operator's")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
+	flag.BoolVar(&o.stress, "stress", false,
+		"also stress-test Riak: run the example application (examples/stressapp) against every cluster over mTLS "+
+			"and check its results and Riak's metrics (enables TLS on the clusters)")
+	flag.DurationVar(&o.stressDuration, "stress-duration", time.Minute, "how long each stress client runs its timed load")
+	flag.IntVar(&o.stressThreads, "stress-threads", 16, "connections (threads) per stress client")
+	flag.IntVar(&o.stressClients, "stress-clients", 2, "stress client pods per cluster")
+	flag.IntVar(&o.stressValueSize, "stress-value-size", 1024, "bytes per stored object")
+	flag.Float64Var(&o.stressReadRatio, "stress-read-ratio", 0.7, "fraction of operations that are reads (0-1)")
+	flag.Int64Var(&o.stressMaxErrors, "stress-max-errors", 0,
+		"client errors tolerated per cluster before the stress test fails")
+	flag.StringVar(&o.stressImage, "stress-image", stressDefaultImage,
+		"image the stress clients run in (needs python3; the script uses only the standard library)")
 	flag.StringVar(&o.operatorNamespace, "operator-namespace", "",
 		"namespace of the operator pod, checked for restarts/OOMKills (default: find it by label in any namespace)")
 	flag.IntVar(&o.ringSize, "ring-size", minRingSize,
@@ -122,37 +143,46 @@ func main() {
 // spread evenly over a few nodes, which makes ring-balance results meaningless.
 const minRingSize = 128
 
-func run(o opts) error {
+// validateOpts rejects option combinations that cannot work, before touching the cluster.
+func validateOpts(o opts) error {
 	if o.ringSize < minRingSize || o.ringSize&(o.ringSize-1) != 0 {
 		return fmt.Errorf("-ring-size %d: must be a power of two >= %d", o.ringSize, minRingSize)
 	}
+	if o.stress && (o.stressReadRatio < 0 || o.stressReadRatio > 1 || o.stressThreads < 1 ||
+		o.stressClients < 1 || o.stressDuration < 5*time.Second) {
+		return fmt.Errorf("-stress needs -stress-read-ratio in [0,1], -stress-threads >= 1, " +
+			"-stress-clients >= 1 and -stress-duration >= 5s")
+	}
+	return nil
+}
+
+func newClient() (client.Client, error) {
 	cfg, err := config.GetConfig()
 	if err != nil {
-		return fmt.Errorf("load kubeconfig: %w", err)
+		return nil, fmt.Errorf("load kubeconfig: %w", err)
 	}
 	sch := scheme.Scheme
 	if err := riakv1.AddToScheme(sch); err != nil {
-		return fmt.Errorf("add riak scheme: %w", err)
+		return nil, fmt.Errorf("add riak scheme: %w", err)
 	}
 	c, err := client.New(cfg, client.Options{Scheme: sch})
 	if err != nil {
-		return fmt.Errorf("build client: %w", err)
+		return nil, fmt.Errorf("build client: %w", err)
+	}
+	return c, nil
+}
+
+func run(o opts) error {
+	if err := validateOpts(o); err != nil {
+		return err
+	}
+	c, err := newClient()
+	if err != nil {
+		return err
 	}
 	ctx := context.Background()
-
 	if o.verifyOnly {
-		if err := verifyEventually(ctx, c, o, "existing state"); err != nil {
-			return err
-		}
-		if o.monitoring {
-			if err := verifyMetricsEventually(ctx, c, o); err != nil {
-				return err
-			}
-			if err := exerciseMetrics(ctx, c, o); err != nil {
-				return err
-			}
-		}
-		return verifyOperatorHealthy(ctx, c, o)
+		return runVerifyOnly(ctx, c, o)
 	}
 
 	total := o.clusters + o.clusters*o.users + o.clusters*o.buckets
@@ -169,8 +199,8 @@ func run(o opts) error {
 	}
 	// Users authenticate by client certificate, so they need a cert-manager
 	// Issuer; only require it (and cert-manager) when creating users.
-	if o.users > 0 {
-		if err := ensureIssuer(ctx, c, o.namespace); err != nil {
+	if o.users > 0 || o.stress {
+		if err := ensureIssuer(ctx, c, o.namespace, o.stress); err != nil {
 			return err
 		}
 	}
@@ -191,6 +221,41 @@ func run(o opts) error {
 	if !o.verify {
 		return verifyOperatorHealthy(ctx, c, o)
 	}
+	return runStages(ctx, c, o)
+}
+
+// runVerifyOnly checks an existing namespace without creating anything.
+func runVerifyOnly(ctx context.Context, c client.Client, o opts) error {
+	if err := verifyEventually(ctx, c, o, "existing state"); err != nil {
+		return err
+	}
+	if o.monitoring {
+		if err := verifyMetricsEventually(ctx, c, o); err != nil {
+			return err
+		}
+		if err := exerciseMetrics(ctx, c, o); err != nil {
+			return err
+		}
+	}
+	if o.stress {
+		if err := runStress(ctx, c, o); err != nil {
+			return err
+		}
+	}
+	return verifyHealth(ctx, c, o)
+}
+
+// verifyHealth checks that neither the Riak nodes nor the operator restarted during the run.
+func verifyHealth(ctx context.Context, c client.Client, o opts) error {
+	if err := verifyRiakPods(ctx, c, o); err != nil {
+		return err
+	}
+	return verifyOperatorHealthy(ctx, c, o)
+}
+
+// runStages runs the verification stages after the resources converged: verify, metrics,
+// stress, then change and delete things and verify again.
+func runStages(ctx context.Context, c client.Client, o opts) error {
 	if err := verifyEventually(ctx, c, o, "after convergence"); err != nil {
 		return err
 	}
@@ -202,22 +267,17 @@ func run(o opts) error {
 			return err
 		}
 	}
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-	if o.mutate {
-		n, err := mutateGrants(ctx, c, o, rng)
-		if err != nil {
-			return fmt.Errorf("mutate grants: %w", err)
-		}
-		fmt.Printf("changed or removed the grants of %d users\n", n)
-		nb, err := mutateBuckets(ctx, c, o, rng)
-		if err != nil {
-			return fmt.Errorf("mutate buckets: %w", err)
-		}
-		fmt.Printf("changed the properties of %d buckets\n", nb)
-		if err := waitObserved(ctx, c, o, 5*time.Minute); err != nil {
+	if o.stress {
+		if err := runStress(ctx, c, o); err != nil {
 			return err
 		}
-		if err := verifyEventually(ctx, c, o, "after changing grants"); err != nil {
+		if err := verifyEventually(ctx, c, o, "after the stress test"); err != nil {
+			return err
+		}
+	}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	if o.mutate {
+		if err := runMutations(ctx, c, o, rng); err != nil {
 			return err
 		}
 	}
@@ -231,7 +291,25 @@ func run(o opts) error {
 			return err
 		}
 	}
-	return verifyOperatorHealthy(ctx, c, o)
+	return verifyHealth(ctx, c, o)
+}
+
+// runMutations changes grants and bucket properties, waits for the operator to act, verifies.
+func runMutations(ctx context.Context, c client.Client, o opts, rng *rand.Rand) error {
+	n, err := mutateGrants(ctx, c, o, rng)
+	if err != nil {
+		return fmt.Errorf("mutate grants: %w", err)
+	}
+	fmt.Printf("changed or removed the grants of %d users\n", n)
+	nb, err := mutateBuckets(ctx, c, o, rng)
+	if err != nil {
+		return fmt.Errorf("mutate buckets: %w", err)
+	}
+	fmt.Printf("changed the properties of %d buckets\n", nb)
+	if err := waitObserved(ctx, c, o, 5*time.Minute); err != nil {
+		return err
+	}
+	return verifyEventually(ctx, c, o, "after changing grants")
 }
 
 // verifyEventually re-runs verifyAll until Riak matches the CRs or the verify
@@ -272,19 +350,50 @@ func ensureNamespace(ctx context.Context, c client.Client, ns string) error {
 	return nil
 }
 
-// ensureIssuer creates a self-signed cert-manager Issuer used by every
-// cert-auth RiakUser in the run.
-func ensureIssuer(ctx context.Context, c client.Client, ns string) error {
-	iss := &unstructured.Unstructured{}
-	iss.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "cert-manager.io", Version: "v1", Kind: "Issuer"})
-	iss.SetName("scale-issuer")
-	iss.SetNamespace(ns)
-	iss.Object["spec"] = map[string]interface{}{"selfSigned": map[string]interface{}{}}
-	if err := c.Create(ctx, iss); err != nil && !apiAlreadyExists(err) {
-		return fmt.Errorf("create issuer: %w", err)
+// ensureIssuer creates the cert-manager Issuer "scale-issuer" used by every cert-auth
+// RiakUser in the run. Normally it is self-signed. With ca (stress mode) it is backed by a
+// CA, because the stress clients verify the server certificate with the ca.crt in their own
+// client certificate Secret: both must come from the same CA.
+func ensureIssuer(ctx context.Context, c client.Client, ns string, ca bool) error {
+	cmGVK := func(kind string) schema.GroupVersionKind {
+		return schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: kind}
 	}
-	return nil
+	create := func(kind, name string, spec map[string]interface{}) error {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(cmGVK(kind))
+		u.SetName(name)
+		u.SetNamespace(ns)
+		u.Object["spec"] = spec
+		if err := c.Create(ctx, u); err != nil && !apiAlreadyExists(err) {
+			return fmt.Errorf("create %s %s: %w", kind, name, err)
+		}
+		return nil
+	}
+	if !ca {
+		return create("Issuer", "scale-issuer", map[string]interface{}{"selfSigned": map[string]interface{}{}})
+	}
+	if err := create("Issuer", "scale-root", map[string]interface{}{"selfSigned": map[string]interface{}{}}); err != nil {
+		return err
+	}
+	if err := create("Certificate", "scale-ca", map[string]interface{}{
+		"isCA": true, "commonName": "openriak-scale-ca", "secretName": "scale-ca-secret",
+		"issuerRef": map[string]interface{}{"name": "scale-root", "kind": "Issuer"},
+	}); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "scale-ca-secret"}, &corev1.Secret{})
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the CA Secret scale-ca-secret was not issued: %w", err)
+		}
+		time.Sleep(time.Second)
+	}
+	return create("Issuer", "scale-issuer", map[string]interface{}{
+		"ca": map[string]interface{}{"secretName": "scale-ca-secret"}})
 }
 
 // randomizeBucketProps gives a bucket a random n_val (1-3, via either typed
@@ -354,6 +463,13 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 		if o.monitoring {
 			spec.Monitoring = &riakv1.MonitoringConfig{Enabled: true, ScrapeKind: o.scrapeKind}
 		}
+		if o.stress {
+			// The stress clients authenticate over TLS with client certificates.
+			spec.TLS = &riakv1.TLSConfig{
+				Enabled:     true,
+				CertManager: &riakv1.CertManagerConfig{IssuerName: "scale-issuer", IssuerKind: "Issuer"},
+			}
+		}
 		if o.ephemeral {
 			spec.EphemeralStorage = true
 		} else {
@@ -396,6 +512,14 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 				return fmt.Errorf("create bucket: %w", err)
 			}
 		}
+		if o.stress {
+			if err := c.Create(ctx, stressBucket(o.namespace, cl)); err != nil && !apiAlreadyExists(err) {
+				return fmt.Errorf("create stress bucket: %w", err)
+			}
+			if err := c.Create(ctx, stressUser(o.namespace, cl)); err != nil && !apiAlreadyExists(err) {
+				return fmt.Errorf("create stress user: %w", err)
+			}
+		}
 	}
 	return nil
 }
@@ -406,6 +530,10 @@ func waitReady(ctx context.Context, c client.Client, o opts, start time.Time) er
 	deadline := start.Add(o.timeout)
 	var clustersReady, usersReady, bucketsReady time.Duration
 	wantC, wantU, wantB := o.clusters, o.clusters*o.users, o.clusters*o.buckets
+	if o.stress { // one extra stress user and bucket per cluster
+		wantU += o.clusters
+		wantB += o.clusters
+	}
 
 	for {
 		nc, fc := countPhase(ctx, c, o.namespace, "RiakClusterList")
