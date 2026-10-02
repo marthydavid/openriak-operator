@@ -135,7 +135,7 @@ func TestStressJob(t *testing.T) {
 	}
 	for _, labels := range []map[string]string{j.Labels, j.Spec.Template.Labels} {
 		if _, bad := labels["cluster"]; bad {
-			t.Error(`stress pods must not carry the "cluster" label: the Riak pod anti-affinity selects on it`)
+			t.Error(`stress pods must not carry the "cluster" label: older clusters' Riak pod anti-affinity selects on it`)
 		}
 		if labels["riak-stress/target"] != "scale-c001" {
 			t.Errorf("the target cluster label is missing: %v", labels)

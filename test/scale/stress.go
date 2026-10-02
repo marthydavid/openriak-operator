@@ -287,9 +287,11 @@ func stressArgs(o opts, cluster string, client int) []string {
 	}
 }
 
-// stressLabels labels a stress client's Job and pod. It must NOT use the key "cluster": the
-// Riak StatefulSet's required pod anti-affinity selects pods by cluster=<name>, so a client
-// labelled that way can never be scheduled on any node that runs a node of that cluster.
+// stressLabels labels a stress client's Job and pod. It deliberately avoids the key "cluster":
+// StatefulSets created by operators before 0.0.11 have a required pod anti-affinity that selects
+// pods by cluster=<name> alone, so a client labelled that way could never be scheduled on a node
+// that runs a node of that cluster (newer ones also require app=riak). Staying clear of it keeps
+// the harness working against clusters that have not rolled yet.
 func stressLabels(cluster string) map[string]string {
 	return map[string]string{"app": "riak-stress", "riak-stress/target": cluster}
 }

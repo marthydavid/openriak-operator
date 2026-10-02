@@ -1,5 +1,15 @@
 # Release notes
 
+## Unreleased
+
+!!! warning "One-time rolling restart on upgrade"
+    The Riak pod anti-affinity now selects only Riak pods (`app=riak,cluster=<name>`) instead of every pod
+    labelled `cluster=<name>`, so unrelated pods with that label are no longer kept off the nodes that host
+    a cluster. The anti-affinity is part of the StatefulSet pod template, so **upgrading the operator rolls
+    every existing RiakCluster once**: its pods restart one at a time (StatefulSet RollingUpdate) and
+    rejoin the ring with their data volumes. Plan the upgrade for a quiet period if a cluster is
+    sensitive to a node restart ([#58](https://github.com/marthydavid/openriak-operator/issues/58)).
+
 ## Operator 0.0.10 / chart 0.1.8
 
 Fixes the operator being **OOMKilled** at its old default memory limit, and adds a choice of Prometheus

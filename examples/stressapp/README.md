@@ -99,6 +99,7 @@ against them. See [Scaling](https://marthydavid.github.io/openriak-operator/scal
 
 - The Python client is not fast: it is a load generator for checking a cluster's correctness and behavior
   under concurrent load, not a benchmark of Riak's maximum throughput. Add more clients (pods) to push harder.
-- Do not label the client pods `cluster=<riak cluster name>`: the Riak pods' required anti-affinity selects
-  on that label, so such a pod could not be scheduled on any node that runs a node of that cluster.
+- Avoid labelling the client pods `cluster=<riak cluster name>`: clusters created by operators older than
+  0.0.11 select pods by that label alone in their required anti-affinity, so such a pod could not be scheduled
+  on any node that runs a node of that cluster. Newer clusters select `app=riak,cluster=<name>` and are unaffected.
 - Tests for the protocol helpers: `python3 -m unittest examples/stressapp/test_riak_stress.py`.

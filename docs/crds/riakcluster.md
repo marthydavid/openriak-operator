@@ -13,7 +13,8 @@ A `RiakCluster` is a set of Riak nodes. The operator reconciles it into:
 
 Pods of one cluster have a **required** anti-affinity on `kubernetes.io/hostname`: each node of a
 cluster runs on a different Kubernetes node, so `spec.size` cannot exceed the number of schedulable
-nodes (further pods stay `Pending`).
+nodes (further pods stay `Pending`). The anti-affinity selects only the cluster's Riak pods
+(`app=riak,cluster=<name>`); other pods are not affected by it.
 
 ## Minimal example
 
