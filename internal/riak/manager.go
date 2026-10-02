@@ -65,7 +65,14 @@ func (m *Manager) ReconcileMembership(ctx context.Context, cluster *riakv1.RiakC
 		}
 	}
 	if seedNode == "" {
-		return false, fmt.Errorf("seed node for %s not found in member-status", seed)
+		// Name what the seed did report: a node that lists only other members, or
+		// none, is not one the operator can join peers to (issue #59).
+		seen := make([]string, 0, len(seedMembers))
+		for _, mem := range seedMembers {
+			seen = append(seen, mem.Status+" "+mem.Node)
+		}
+		return false, fmt.Errorf("seed node for %s not found in member-status (members: [%s])",
+			seed, strings.Join(seen, ", "))
 	}
 
 	joined := 0

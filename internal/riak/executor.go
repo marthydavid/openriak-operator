@@ -87,6 +87,12 @@ func (e *Executor) ExecuteRiakAdmin(ctx context.Context, namespace, podName, con
 // instead, either as a bare "error" on the last line (bucket-type commands) or
 // as an {error,Reason} term (security commands). Without this check every
 // failed command would look like a success.
+//
+// The same holds when the node cannot be reached at all: riak-admin then prints
+// the release script's "Node <name> is not responding to pings" and still exits
+// 0. That reply names the node riak-admin addressed, which is what tells a node
+// running under an unexpected (e.g. short) name apart from one that is down
+// (issue #59), so it must surface as an error rather than as an empty result.
 func riakAdminFailed(out string) bool {
 	last := ""
 	for _, line := range strings.Split(out, "\n") {
@@ -94,12 +100,18 @@ func riakAdminFailed(out string) bool {
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "{error,") {
+		if strings.HasPrefix(line, "{error,") || nodeNotResponding(line) {
 			return true
 		}
 		last = line
 	}
 	return last == "error"
+}
+
+// nodeNotResponding matches the release script's reply when riak-admin cannot
+// reach the node: "Node riak@<host> is not responding to pings".
+func nodeNotResponding(line string) bool {
+	return strings.HasPrefix(line, "Node ") && strings.HasSuffix(line, " is not responding to pings")
 }
 
 // subcommand returns the riak-admin subcommand words (e.g. "bucket-type create")

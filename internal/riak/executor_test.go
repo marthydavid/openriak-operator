@@ -379,6 +379,11 @@ func TestRiakAdminFailed(t *testing.T) {
 		{"This name is already in use\n{error,role_exists}\n\n| username |\nok", true},
 		{"nosuch is not an existing bucket type\n{error,undefined}", true},
 		{"an error occurred earlier\nok", false},
+		// The node is unreachable: riak-admin still exits 0 (issue #59).
+		{"Node riak@riak-0 is not responding to pings", true},
+		{"Node riak@riak-0.riak-headless.ns.svc.cluster.local is not responding to pings\n", true},
+		// A member-status table mentions nodes but is a success.
+		{"valid     100.0%      --      riak@riak-0\nValid:1 / Leaving:0 / Exiting:0 / Joining:0 / Down:0", false},
 	}
 	for _, c := range cases {
 		if got := riakAdminFailed(c.out); got != c.fail {

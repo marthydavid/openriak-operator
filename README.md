@@ -458,19 +458,20 @@ kubectl describe riakbucket mydata-bucket | grep -A 5 "Status"
 
 ### Debug Commands
 
+Nodes are named after the pod FQDN, so `riak-admin` must be pointed at the node's generated
+`vm.args` (a bare `riak-admin` answers `Node riak@<pod> is not responding to pings`):
+
 ```bash
-# Execute riak-admin commands on a node
-kubectl exec -it my-cluster-0 -c riak -- riak-admin status
+ra() { kubectl exec "$1" -c riak -- sh -c \
+  'VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args | tail -1) exec riak-admin "$@"' riak-admin "${@:2}"; }
 
-# List cluster members
-kubectl exec -it my-cluster-0 -c riak -- riak-admin member-status
-
-# Get ring status
-kubectl exec -it my-cluster-0 -c riak -- riak-admin ring_status
-
-# Check bucket types
-kubectl exec -it my-cluster-0 -c riak -- riak-admin bucket-type list
+ra my-cluster-0 status          # node stats
+ra my-cluster-0 member-status   # cluster members
+ra my-cluster-0 ring-status     # ring status
+ra my-cluster-0 bucket-type list
 ```
+
+See [Troubleshooting](docs/troubleshooting.md) for symptoms and fixes.
 
 ## Performance Tuning
 
