@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -97,6 +98,17 @@ var _ = Describe("RiakCluster Controller", func() {
 			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
 			Expect(*sts.Spec.Replicas).To(Equal(int32(3)))
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("basho/riak-kv:latest"))
+
+			By("anti-affinity selecting only this cluster's Riak pods")
+			terms := sts.Spec.Template.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+			Expect(terms).To(HaveLen(1))
+			Expect(terms[0].TopologyKey).To(Equal("kubernetes.io/hostname"))
+			Expect(terms[0].LabelSelector.MatchLabels).To(Equal(map[string]string{"app": "riak", "cluster": clusterName}))
+			sel, err := metav1.LabelSelectorAsSelector(terms[0].LabelSelector)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sel.Matches(labels.Set(sts.Spec.Template.Labels))).To(BeTrue(), "Riak pods must match")
+			Expect(sel.Matches(labels.Set{"cluster": clusterName})).To(BeFalse(), "an unrelated pod labelled cluster=<name> must not match")
+			Expect(sel.Matches(labels.Set{"app": "riak", "cluster": "other"})).To(BeFalse())
 
 			headless := &corev1.Service{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName + "-headless", Namespace: ns}, headless)).To(Succeed())

@@ -451,7 +451,10 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
 								{
 									LabelSelector: &metav1.LabelSelector{
+										// Riak pods only (app=riak): selecting on cluster=<name>
+										// alone also repelled unrelated pods carrying that label.
 										MatchLabels: map[string]string{
+											"app":     "riak",
 											"cluster": cluster.Name,
 										},
 									},

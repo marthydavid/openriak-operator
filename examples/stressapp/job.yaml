@@ -13,7 +13,8 @@ spec:
   backoffLimit: 0
   template:
     metadata:
-      # Do NOT use a "cluster" label here: the Riak pods' anti-affinity selects on cluster=<name>.
+      # Avoid a "cluster" label here: clusters created by operators before 0.0.11 have an
+      # anti-affinity that selects on cluster=<name> alone (newer ones also require app=riak).
       labels: {app: riak-stress}
     spec:
       restartPolicy: Never

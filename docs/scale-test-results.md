@@ -146,8 +146,9 @@ followed were applied correctly (945 and 855 facts), all 9 Riak pods had **0 res
 
 !!! note "A gotcha the stress test found"
     The first stress clients were created with the label `cluster=<name>` and could not be scheduled: the Riak
-    pods' **required anti-affinity selects on that label**, so no node was eligible. Do not label your own pods
-    `cluster=<riak cluster name>` ([Troubleshooting](troubleshooting.md#cluster)).
+    pods' **required anti-affinity selected on that label alone**, so no node was eligible. Operators from
+    0.0.11 on select `app=riak,cluster=<name>`; clusters created by older versions keep the old selector until
+    they roll ([Troubleshooting](troubleshooting.md#cluster)).
 
 ## What the test found
 
