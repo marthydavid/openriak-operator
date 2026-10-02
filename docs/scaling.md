@@ -121,6 +121,7 @@ success prints `MATCH: Riak holds exactly what the CRs declare`.
 | `-verify-workers` | parallel `kubectl exec` calls while verifying (default 6) |
 | `-verify-timeout` | how long verification retries before reporting mismatches |
 | `-monitoring` | enable `spec.monitoring` on every cluster and verify the Riak metrics (see below) |
+| `-scrape-kind` | with `-monitoring`: `PodMonitor`, `ServiceMonitor` or `None` (default: the operator's) |
 
 ```bash
 go run ./test/scale -clusters 3 -users 20 -buckets 20 -replicas 3 \
@@ -136,6 +137,7 @@ created with `spec.monitoring.enabled: true`, so each Riak pod gets the
 After convergence the harness checks that:
 
 - every cluster reports `status.monitoringStatus.enabled` and `exporterReady`;
+- the cluster's PodMonitor selects every Riak pod (or its ServiceMonitor selects a Service) that exposes the `metrics` port, so Prometheus would find a target per node;
 - **every node** serves the exporter's Riak probe — scraped through the
   apiserver pod proxy (`/api/v1/namespaces/<ns>/pods/<pod>:7979/proxy/probe`),
   so no Prometheus is needed — with `riak_node_gets_total`,

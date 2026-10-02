@@ -189,7 +189,10 @@ var _ = Describe("Resource status reporting", func() {
 			Expect(observed.Status.MonitoringStatus.Enabled).To(BeTrue())
 			Expect(observed.Status.MonitoringStatus.ExporterReady).To(BeTrue())
 			Expect(observed.Status.MonitoringStatus.ExporterError).To(BeEmpty())
-			Expect(observed.Status.MonitoringStatus.ServiceMonitorReady).To(BeTrue())
+			Expect(observed.Status.MonitoringStatus.ScrapeKind).To(Equal(riakv1.ScrapeKindPodMonitor))
+			Expect(observed.Status.MonitoringStatus.ScrapeObjectReady).To(BeTrue())
+			Expect(observed.Status.MonitoringStatus.ServiceMonitorReady).To(BeFalse(),
+				"the deprecated field is only true for the ServiceMonitor kind")
 
 			By("reporting TLS as pending while cert-manager has not issued the certificate")
 			Expect(observed.Status.TLSStatus.Enabled).To(BeTrue())
