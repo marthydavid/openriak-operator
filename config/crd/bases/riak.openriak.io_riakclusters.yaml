@@ -77,12 +77,58 @@ spec:
                   nodes.
                 properties:
                   enabled:
-                    description: Enabled turns on the metrics exporter sidecar and
-                      ServiceMonitor.
+                    description: Enabled turns on the metrics exporter sidecar.
                     type: boolean
                   exporterImage:
                     description: ExporterImage overrides the json_exporter sidecar
                       image.
+                    type: string
+                  metricsConfig:
+                    description: |-
+                      MetricsConfig supplies your own json_exporter configuration (which of
+                      Riak's /stats fields become which metrics) from a ConfigMap, replacing the
+                      built-in mapping. The module must be named "riak". The exporter reads the
+                      file at start-up, so restart the Riak pods after changing the ConfigMap.
+                    properties:
+                      configMapKeyRef:
+                        description: ConfigMapKeyRef selects the key of a ConfigMap
+                          in the cluster's namespace.
+                        properties:
+                          key:
+                            description: The key to select.
+                            type: string
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          optional:
+                            description: Specify whether the ConfigMap or its key
+                              must be defined
+                            type: boolean
+                        required:
+                        - key
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    required:
+                    - configMapKeyRef
+                    type: object
+                  scrapeKind:
+                    default: PodMonitor
+                    description: |-
+                      ScrapeKind selects the Prometheus Operator object the operator creates to
+                      scrape the exporter: a PodMonitor (default; selects the Riak pods directly),
+                      a ServiceMonitor (selects the client Service), or None (bring your own, see
+                      examples/metrics). It is skipped, not an error, when the Prometheus
+                      Operator CRDs are not installed.
+                    enum:
+                    - PodMonitor
+                    - ServiceMonitor
+                    - None
                     type: string
                 required:
                 - enabled
@@ -398,10 +444,22 @@ spec:
                     description: ExporterReady indicates if every node's metrics exporter
                       sidecar is ready.
                     type: boolean
+                  scrapeKind:
+                    description: |-
+                      ScrapeKind is the Prometheus Operator object the operator manages
+                      (PodMonitor, ServiceMonitor or None).
+                    type: string
+                  scrapeObjectReady:
+                    description: |-
+                      ScrapeObjectReady indicates if that PodMonitor/ServiceMonitor exists (it is
+                      skipped on clusters without the Prometheus Operator CRDs). Always false
+                      when ScrapeKind is None.
+                    type: boolean
                   serviceMonitorReady:
                     description: |-
-                      ServiceMonitorReady indicates if the ServiceMonitor exists (it is skipped on
-                      clusters without the Prometheus Operator CRDs).
+                      ServiceMonitorReady indicates if the ServiceMonitor exists. Deprecated: use
+                      ScrapeObjectReady; kept for compatibility, true only for ScrapeKind
+                      ServiceMonitor.
                     type: boolean
                 type: object
               nodeConditions:

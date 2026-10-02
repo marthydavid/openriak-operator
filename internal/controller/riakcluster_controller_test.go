@@ -348,7 +348,7 @@ var _ = Describe("RiakCluster Controller", func() {
 
 		AfterEach(func() { cleanupCluster(clusterName) })
 
-		It("injects the exporter sidecar, ConfigMap, Service port and ServiceMonitor", func() {
+		It("injects the exporter sidecar, ConfigMap, Service port and a PodMonitor (default)", func() {
 			_, err := reconcileCluster(ctx, clusterName, ns)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -388,16 +388,134 @@ var _ = Describe("RiakCluster Controller", func() {
 			}
 			Expect(sawMetricsPort).To(BeTrue(), "expected metrics Service port")
 
-			By("a ServiceMonitor created for the cluster")
-			sm := &unstructured.Unstructured{}
-			sm.SetGroupVersionKind(schema.GroupVersionKind{
-				Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"})
+			By("a PodMonitor (the default scrapeKind) created for the cluster, and no ServiceMonitor")
+			pm := newMonitor("PodMonitor")
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
-				Name: clusterName + "-metrics", Namespace: ns}, sm)).To(Succeed())
+				Name: clusterName + "-metrics", Namespace: ns}, pm)).To(Succeed())
+			sel, _, _ := unstructured.NestedStringMap(pm.Object, "spec", "selector", "matchLabels")
+			Expect(sel).To(Equal(map[string]string{"app": "riak", "cluster": clusterName}))
+			eps, _, _ := unstructured.NestedSlice(pm.Object, "spec", "podMetricsEndpoints")
+			Expect(eps).To(HaveLen(1))
+			Expect(eps[0]).To(HaveKeyWithValue("port", "metrics"))
+			Expect(eps[0]).To(HaveKeyWithValue("path", "/probe"))
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{
+				Name: clusterName + "-metrics", Namespace: ns}, newMonitor("ServiceMonitor")))).To(BeTrue())
 
-			By("a second reconcile being idempotent (ServiceMonitor already exists)")
+			By("a second reconcile being idempotent (PodMonitor already exists)")
 			_, err = reconcileCluster(ctx, clusterName, ns)
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Context("scrape kind and custom exporter rules", func() {
+		const clusterName = "scrape-kind-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+		monName := types.NamespacedName{Name: clusterName + "-metrics", Namespace: ns}
+
+		exists := func(kind string) bool {
+			err := k8sClient.Get(ctx, monName, newMonitor(kind))
+			if err != nil {
+				Expect(errors.IsNotFound(err)).To(BeTrue(), "unexpected error: %v", err)
+			}
+			return err == nil
+		}
+		setMonitoring := func(m *riakv1.MonitoringConfig) {
+			c := &riakv1.RiakCluster{}
+			Expect(k8sClient.Get(ctx, nn, c)).To(Succeed())
+			c.Spec.Monitoring = m
+			Expect(k8sClient.Update(ctx, c)).To(Succeed())
+		}
+
+		BeforeEach(func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec: riakv1.RiakClusterSpec{
+					Size:       1,
+					Image:      "basho/riak-kv:latest",
+					Monitoring: &riakv1.MonitoringConfig{Enabled: true},
+				},
+			})).To(Succeed())
+		})
+		AfterEach(func() {
+			cleanupCluster(clusterName)
+			_ = k8sClient.Delete(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "my-rules", Namespace: ns}})
+		})
+
+		It("defaults scrapeKind to PodMonitor in the API", func() {
+			c := &riakv1.RiakCluster{}
+			Expect(k8sClient.Get(ctx, nn, c)).To(Succeed())
+			Expect(c.Spec.Monitoring.ScrapeKind).To(Equal(riakv1.ScrapeKindPodMonitor))
+		})
+
+		It("switches PodMonitor -> ServiceMonitor -> None without leaving the other behind", func() {
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(exists("PodMonitor")).To(BeTrue())
+			Expect(exists("ServiceMonitor")).To(BeFalse())
+
+			setMonitoring(&riakv1.MonitoringConfig{Enabled: true, ScrapeKind: riakv1.ScrapeKindServiceMonitor})
+			_, err = reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(exists("ServiceMonitor")).To(BeTrue())
+			Expect(exists("PodMonitor")).To(BeFalse())
+			c := &riakv1.RiakCluster{}
+			Expect(k8sClient.Get(ctx, nn, c)).To(Succeed())
+			Expect(c.Status.MonitoringStatus.ScrapeKind).To(Equal(riakv1.ScrapeKindServiceMonitor))
+			Expect(c.Status.MonitoringStatus.ScrapeObjectReady).To(BeTrue())
+			Expect(c.Status.MonitoringStatus.ServiceMonitorReady).To(BeTrue())
+
+			setMonitoring(&riakv1.MonitoringConfig{Enabled: true, ScrapeKind: riakv1.ScrapeKindNone})
+			_, err = reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(exists("ServiceMonitor")).To(BeFalse())
+			Expect(exists("PodMonitor")).To(BeFalse())
+			Expect(k8sClient.Get(ctx, nn, c)).To(Succeed())
+			Expect(c.Status.MonitoringStatus.ScrapeKind).To(Equal(riakv1.ScrapeKindNone))
+			Expect(c.Status.MonitoringStatus.ScrapeObjectReady).To(BeFalse())
+			Expect(c.Status.MonitoringStatus.Enabled).To(BeTrue(), "the exporter stays on without a scrape object")
+		})
+
+		It("mounts a user-supplied exporter config and skips the generated ConfigMap", func() {
+			setMonitoring(&riakv1.MonitoringConfig{
+				Enabled: true,
+				MetricsConfig: &riakv1.MetricsConfigSource{ConfigMapKeyRef: corev1.ConfigMapKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "my-rules"}, Key: "rules.yml"}},
+			})
+
+			By("failing clearly while the ConfigMap is missing")
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).To(MatchError(ContainSubstring(`ConfigMap "my-rules" not found`)))
+
+			By("failing clearly while the key is missing")
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-rules", Namespace: ns},
+				Data:       map[string]string{"other": "x"},
+			}
+			Expect(k8sClient.Create(ctx, cm)).To(Succeed())
+			_, err = reconcileCluster(ctx, clusterName, ns)
+			Expect(err).To(MatchError(ContainSubstring(`has no key "rules.yml"`)))
+
+			By("succeeding once the key exists, projecting it as config.yml")
+			cm.Data["rules.yml"] = "modules:\n  riak:\n    metrics: []\n"
+			Expect(k8sClient.Update(ctx, cm)).To(Succeed())
+			_, err = reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			var vol *corev1.Volume
+			for i := range sts.Spec.Template.Spec.Volumes {
+				if sts.Spec.Template.Spec.Volumes[i].Name == "metrics-exporter-config" {
+					vol = &sts.Spec.Template.Spec.Volumes[i]
+				}
+			}
+			Expect(vol).NotTo(BeNil())
+			Expect(vol.ConfigMap.Name).To(Equal("my-rules"))
+			Expect(vol.ConfigMap.Items).To(Equal([]corev1.KeyToPath{{Key: "rules.yml", Path: "config.yml"}}))
+
+			generated := &corev1.ConfigMap{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: clusterName + "-metrics-exporter", Namespace: ns}, generated)
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "the built-in mapping must not be generated")
 		})
 	})
 
@@ -975,3 +1093,10 @@ var _ = Describe("RiakCluster Controller", func() {
 		})
 	})
 })
+
+// newMonitor returns an empty Prometheus Operator monitor of the given kind.
+func newMonitor(kind string) *unstructured.Unstructured {
+	m := &unstructured.Unstructured{}
+	m.SetGroupVersionKind(schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: kind})
+	return m
+}
