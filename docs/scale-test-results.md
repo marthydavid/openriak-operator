@@ -20,6 +20,9 @@ from Riak on every node** and compares it with what the custom resources declare
 
 ## Environment
 
+Full details of the cluster (hardware, storage, services, what else runs on it) are on the
+[Test environment](test-environment.md) page.
+
 | | |
 |---|---|
 | Cluster | OKD, 3 schedulable control-plane nodes (12 CPU / ~125 GiB each), shared with other workloads |

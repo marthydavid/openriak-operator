@@ -50,4 +50,5 @@ nav:
       - Operator configuration: operator-configuration.md
       - Scaling: scaling.md
       - Scale test results: scale-test-results.md
+      - Test environment: test-environment.md
       - Troubleshooting: troubleshooting.md
