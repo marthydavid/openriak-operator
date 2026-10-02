@@ -37,6 +37,10 @@ changes, and note `helm uninstall` leaves the CRDs (and all Riak custom resource
 | `leaderElection.enabled` | `true` | Enable leader election |
 | `metrics.enabled` | `true` | Serve authenticated metrics on `:8443` with Service + token-review RBAC |
 | `metrics.serviceMonitor.enabled` | `false` | Create a ServiceMonitor (requires Prometheus Operator CRDs) |
+| `dashboard.enabled` | `false` | Ship the Riak KV Grafana dashboard as a ConfigMap (namespace/cluster/pod selectors) for Grafana's dashboard sidecar |
+| `dashboard.namespace` | release namespace | Namespace for that ConfigMap (set it to Grafana's namespace if the sidecar only watches one) |
+| `dashboard.labels` | `grafana_dashboard: "1"` | Labels the sidecar selects on |
+| `dashboard.annotations` | `{}` | Extra annotations, e.g. `grafana_folder` |
 | `serviceAccount.create` | `true` | Create the ServiceAccount |
 | `serviceAccount.name` | release fullname | ServiceAccount name |
 | `rbac.create` | `true` | Create ClusterRole/Role and bindings |

@@ -48,6 +48,7 @@ nav:
   - Operations:
       - mTLS with cert-manager: mtls.md
       - Operator configuration: operator-configuration.md
+      - Metrics examples: metrics-examples.md
       - Scaling: scaling.md
       - Scale test results: scale-test-results.md
       - Test environment: test-environment.md

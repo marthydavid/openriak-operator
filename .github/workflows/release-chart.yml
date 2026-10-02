@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - "charts/**"
+      - "examples/metrics/grafana-dashboard.json"
       - ".github/workflows/release-chart.yml"
 
 jobs:
@@ -27,11 +28,16 @@ jobs:
       - name: Render templates (defaults)
         run: helm template smoke charts/openriak-operator > /dev/null
 
+      - name: Dashboard copy matches the chart's
+        run: diff examples/metrics/grafana-dashboard.json charts/openriak-operator/dashboards/riak-kv.json
+
       - name: Render templates (all toggles flipped)
         run: |
           helm template smoke charts/openriak-operator \
             --set metrics.serviceMonitor.enabled=true \
             --set replicaCount=2 > /dev/null
+          helm template smoke charts/openriak-operator \
+            --set dashboard.enabled=true > /dev/null
           helm template smoke charts/openriak-operator \
             --set metrics.enabled=false \
             --set leaderElection.enabled=false \

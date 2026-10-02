@@ -1,0 +1,30 @@
+# PodMonitor for a RiakCluster named "my-cluster" with spec.monitoring.enabled=true.
+# Selects Riak pods by the labels the operator sets (app=riak, cluster=<name>) and
+# scrapes the json_exporter sidecar's named container port "metrics" (7979).
+# No Service labels are involved. Change name/namespace/cluster to match yours.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: my-cluster-riak
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: openriak
+    # Add whatever label your Prometheus podMonitorSelector requires, e.g.
+    # release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: riak
+      cluster: my-cluster
+  # Copy the pod's "cluster" label onto every series; the example alerts and
+  # dashboard group by it.
+  podTargetLabels:
+    - cluster
+  podMetricsEndpoints:
+    - port: metrics
+      path: /probe
+      params:
+        module: ["riak"]
+        target: ["http://127.0.0.1:8098/stats"]
+      interval: 30s
+      scrapeTimeout: 10s
