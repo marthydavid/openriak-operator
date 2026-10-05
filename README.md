@@ -600,5 +600,4 @@ For issues, questions, or feature requests:
 - [ ] Automated backups
 - [x] Cluster monitoring and metrics
 - [ ] Helm chart
-- [ ] Riak search integration
 - [ ] Multi-datacenter support
