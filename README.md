@@ -597,7 +597,7 @@ For issues, questions, or feature requests:
 ## Roadmap
 
 - [x] TLS/cert-manager integration (server TLS + mTLS client-certificate user auth)
-- [ ] Automated backups
+- [ ] Automated backups ([design](docs/backup-design.md))
 - [x] Cluster monitoring and metrics
-- [ ] Helm chart
+- [x] Helm chart (`charts/openriak-operator`)
 - [ ] Multi-datacenter support
