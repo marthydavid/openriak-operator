@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -47,7 +48,7 @@ func runShellCommand(ctx context.Context, name string, args ...string) (string, 
 func (e *Executor) ExecuteRiakAdmin(ctx context.Context, namespace, podName, containerName string, args ...string) (string, error) {
 	e.log.V(2).Info("executing riak-admin command", "pod", podName, "args", args)
 
-	cmdArgs := []string{
+	base := []string{
 		"exec",
 		"-n", namespace,
 		podName,
@@ -61,7 +62,7 @@ func (e *Executor) ExecuteRiakAdmin(ctx context.Context, namespace, podName, con
 		"VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args 2>/dev/null | tail -1) exec riak-admin \"$@\"",
 		"riak-admin",
 	}
-	cmdArgs = append(cmdArgs, args...)
+	cmdArgs := slices.Concat(base, args)
 
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -340,9 +341,8 @@ func (e *Executor) GrantPermissions(ctx context.Context, namespace, podName, con
 	if err != nil {
 		return err
 	}
-	args := []string{"security", "grant", strings.Join(permissionTokens(permissions), ","), "on"}
-	args = append(args, target...)
-	args = append(args, "to", username)
+	args := slices.Concat([]string{"security", "grant", strings.Join(permissionTokens(permissions), ","), "on"},
+		target, []string{"to", username})
 	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
 	return err
 }
@@ -354,9 +354,8 @@ func (e *Executor) RevokePermissions(ctx context.Context, namespace, podName, co
 	if err != nil {
 		return err
 	}
-	args := []string{"security", "revoke", strings.Join(tokens, ","), "on"}
-	args = append(args, target...)
-	args = append(args, "from", username)
+	args := slices.Concat([]string{"security", "revoke", strings.Join(tokens, ","), "on"},
+		target, []string{"from", username})
 	_, err = e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, args...)
 	return err
 }

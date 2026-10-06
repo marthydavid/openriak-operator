@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run what CI runs, before pushing: gofmt, go vet, golangci-lint (the pinned v1.59.1 on Go 1.22,
+# Run what CI runs, before pushing: gofmt, go vet, golangci-lint (the pinned v2.14.0,
 # exactly like .github/workflows/lint.yml), and the unit tests. Exits non-zero on the first failure.
 #
 #   hack/pre-push.sh            # everything
@@ -21,11 +21,10 @@ fi
 echo "== go vet"
 go vet ./...
 
-# A globally installed golangci-lint is usually a newer major version that cannot read this repo's
-# config, and a newer local Go cannot build/run the pinned one. Use the Makefile's pinned install
-# under the Go version CI uses.
-echo "== golangci-lint v1.59.1 (Go 1.22, as CI)"
-GOTOOLCHAIN=go1.22.12 make lint
+# Use the Makefile's pinned golangci-lint rather than a globally installed one, which may be a
+# different major version and cannot be trusted to read this repo's config.
+echo "== golangci-lint v2.14.0 (as CI)"
+make lint
 
 echo "== unit tests"
 pkgs="./internal/riak ./test/scale ./test/manifests"

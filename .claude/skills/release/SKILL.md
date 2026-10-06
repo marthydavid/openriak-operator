@@ -46,7 +46,7 @@ Add a `## Operator <op> / chart <chart>` section at the **top** of `docs/release
 
 ```bash
 go build ./... && go test ./internal/... -timeout 180s
-GOTOOLCHAIN=go1.22.12 golangci-lint run
+make lint
 helm lint charts/openriak-operator   # if helm is available
 ```
 

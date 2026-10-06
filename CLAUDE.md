@@ -14,21 +14,19 @@ The `test/e2e` package requires a live Kubernetes cluster; expected to fail loca
 
 ### Linting locally
 
-CI runs golangci-lint v1.59.1 under Go 1.22 (`.github/workflows/lint.yml`). Run it the same way,
-or it reports nothing useful:
+CI runs golangci-lint v2.14.0 (`.github/workflows/lint.yml`; the config is golangci-lint v2 format).
+Run the same pinned version, or it reports nothing useful:
 
 ```bash
-GOTOOLCHAIN=go1.22.12 make lint      # installs the pinned v1.59.1 into bin/ and runs it
+make lint                            # installs the pinned v2.14.0 into bin/ and runs it
 hack/pre-push.sh                     # gofmt + vet + pinned lint + unit tests: run before EVERY push
 ```
 
-A globally installed `golangci-lint` is typically a newer major version that cannot read
+A globally installed `golangci-lint` may be a different major version that cannot read
 `.golangci.yml`; do not use it. See `.claude/skills/pre-push/SKILL.md`.
 
-Without the pinned toolchain, a newer local Go emits export data that v1.59.1 cannot parse, and
-every file drowns in bogus `typecheck` errors (`r.Get undefined`, `undefined: Expect`) that mask
-the real findings — so a "clean" run means nothing. `GOTOOLCHAIN` fetches the toolchain through
-GOPROXY, so it works where a `dl.google.com` download is blocked.
+The module needs Go 1.25+ (`go.mod`). Targeted platforms: OpenShift/OKD 4.21 (Kubernetes 1.34) and
+4.22 (1.35) and AKS (1.34+); controller-runtime v0.23 / k8s libraries 0.35 / envtest 1.35.
 
 Watch `gocyclo` in particular: `RiakUserReconciler.Reconcile` sits near the limit of 30, so a
 couple of added branches trip it. Extract into a helper rather than raising the threshold.
@@ -134,7 +132,7 @@ All images are published to **GitHub Container Registry** under `ghcr.io/marthyd
 
 | Image | Registry path | Base |
 |-------|--------------|------|
-| Operator | `ghcr.io/marthydavid/openriak-operator:<tag>` | Go 1.22 / alpine |
+| Operator | `ghcr.io/marthydavid/openriak-operator:<tag>` | Go 1.25 / alpine |
 | Riak KV 3.0 | `ghcr.io/marthydavid/riak:3.0.16` (alias `3.0`) | amd64: UBI8/el8 OTP22.3; arm64: AL2/graviton3 OTP22 |
 | Riak KV 3.2 (default, `latest`) | `ghcr.io/marthydavid/riak:3.2.6` (alias `3.2`) | amd64: UBI8/el8 OTP24; arm64: AL2023/graviton2 OTP24 |
 | Riak KV 3.4 | `ghcr.io/marthydavid/riak:3.4.0` (alias `3.4`) | amd64 only: UBI9/el9 OTP26 (all upstream aarch64 RPMs are graviton3/SVE → SIGILL on generic arm64; no non-RPM bases used) |
