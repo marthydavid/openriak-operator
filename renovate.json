@@ -17,18 +17,61 @@
     "gomodTidy"
   ],
   "constraints": {
-    "go": "1.22"
+    "go": "1.25"
   },
   "packageRules": [
     {
-      "description": "Only offer module versions that build on the Go line this repo targets. constraints.go alone just picks the toolchain Renovate runs; without strict filtering it would still propose a dependency whose own go.mod requires a newer Go, which is precisely the break the pins below exist to avoid.",
+      "description": "Only offer module versions that build on the Go line this repo targets (constraints.go below). constraints.go alone just picks the toolchain Renovate runs; without strict filtering it would still propose a dependency whose own go.mod requires a newer Go. This only covers the gomod manager: tools pinned in the Makefile need their own allowedVersions rule (see controller-tools).",
       "matchManagers": [
         "gomod"
       ],
       "constraintsFiltering": "strict"
     },
     {
-      "description": "Kubernetes libraries are version-locked to controller-runtime — api, apimachinery, client-go and apiextensions-apiserver must move as a set, so keep them in one PR.",
+      "description": "Moving the Kubernetes library line (k8s.io/* 0.x, controller-runtime) changes the platforms we support and needs envtest/e2e Kubernetes versions moved with it. Patch updates only.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "k8s.io/**",
+        "sigs.k8s.io/controller-runtime"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "controller-gen is pinned in the Makefile and read by a custom manager, which the strict Go-constraint filtering above does not cover. v0.22.0 requires Go >= 1.26 and breaks `make manifests` on the repo's Go 1.25. Raise this bound together with the Go line.",
+      "matchPackageNames": [
+        "sigs.k8s.io/controller-tools"
+      ],
+      "allowedVersions": "<0.22.0"
+    },
+    {
+      "description": "The Go version used by CI (setup-go go-version) must follow the go directive in go.mod, the builder image and golangci-lint: raising it is a manual decision.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepNames": [
+        "go",
+        "golang"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The docs toolchain's Python version moves together with the pinned mkdocs dependencies, not on its own.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepNames": [
+        "python"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Kubernetes libraries are version-locked to controller-runtime (api, apimachinery, client-go, apiextensions-apiserver move as a set), so keep them in one PR. Their minor line is tied to the platforms we target (OpenShift/OKD 4.21 = Kubernetes 1.34, 4.22 = 1.35, AKS 1.34+; k8s libs 0.35, controller-runtime v0.23): only patch updates are automatic, a minor/major move is a deliberate platform decision.",
       "matchManagers": [
         "gomod"
       ],
@@ -50,7 +93,7 @@
       "enabled": false
     },
     {
-      "description": "Keep the builder image on the Go line the module targets. golangci-lint cannot parse export data from a newer Go than it was built with, so a silent bump here can break the lint job.",
+      "description": "Keep the builder image on the Go line the module targets (1.25). golangci-lint cannot parse export data from a newer Go than it was built with, and controller-gen v0.22+ needs Go 1.26, so a silent bump here breaks lint and codegen.",
       "matchDatasources": [
         "docker"
       ],
