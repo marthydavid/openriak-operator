@@ -40,7 +40,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '~1.25'
+          go-version: '~1.27.0'
 
       - name: Build image (local platform only)
         uses: docker/build-push-action@v7
@@ -74,7 +74,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '~1.25'
+          go-version: '~1.27.0'
 
       - name: Install Kind
         run: |
