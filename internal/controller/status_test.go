@@ -42,7 +42,7 @@ import (
 var errGrantRejected = errors.New("{unknown_permission}")
 
 // makeRiakPod creates a Riak node pod for a cluster and sets its status.
-func makeRiakPod(ctx context.Context, ns, clusterName, podName string, status corev1.PodStatus, extraContainers ...corev1.Container) *corev1.Pod {
+func makeRiakPod(ctx context.Context, ns, clusterName, podName string, status corev1.PodStatus, extraContainers ...corev1.Container) *corev1.Pod { //nolint:unparam
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
