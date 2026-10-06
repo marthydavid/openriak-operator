@@ -1,5 +1,31 @@
 # Release notes
 
+## Operator 0.0.12 / chart 0.1.10
+
+Moves the operator to **Go 1.25, controller-runtime v0.23 and Kubernetes client libraries 0.35**, so it matches
+OpenShift/OKD 4.22 (Kubernetes 1.35) exactly and stays within one minor version of OpenShift 4.21 (1.34) and
+AKS (1.34 and later). It also fixes Riak 3.0 clusters never becoming Ready. No behaviour change for existing
+clusters; a plain `helm upgrade` is enough.
+
+### Fixes
+
+- **Riak 3.0 clusters never left `Creating`.** The `3.0.16` operand image has no `riak-admin` script (in Riak
+  3.0 the admin CLI is `riak admin ...`), so the entrypoint readiness check never succeeded and pods restarted
+  every 120 seconds, and the operator's `riak-admin` calls could not run either. The image now ships a
+  `riak-admin` wrapper where the RPM lacks one ([#64](https://github.com/marthydavid/openriak-operator/pull/64)).
+  The existing `3.0.16` tag was rebuilt: pin it by digest or set `spec.imagePullPolicy: Always` to pick it up.
+
+### Changes you may notice
+
+- **Platform support is verified on the new stack**: the scale test (3-node cluster, users and buckets, verified
+  against Riak on every node) passes on OKD 4.22 for the `3.0`, `3.2` and `3.4` operand images with this release.
+- The CRDs were regenerated with controller-gen v0.20.1; the schema is unchanged apart from a reworded
+  field description.
+- Build and development: the module requires Go 1.25, golangci-lint moved to v2, envtest uses Kubernetes 1.35.
+  New lifecycle tests cover scaling a cluster up and adding and deleting buckets and users
+  ([#68](https://github.com/marthydavid/openriak-operator/pull/68)).
+- The README roadmap no longer lists Riak search integration.
+
 ## Operator 0.0.11 / chart 0.1.9
 
 Fixes an intermittent **Riak crash-loop on first start**, and stops the Riak pod anti-affinity from keeping
