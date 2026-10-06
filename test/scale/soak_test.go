@@ -22,6 +22,7 @@ func soakTestOpts() opts {
 			readRatio: 0.5, valueSize: 16384, nVal: 3, pr: 2, pw: 2, storage: "300Gi", memory: "4Gi",
 			maxMemory: "16Gi", cpu: "2", replicas: 3, maxReplicas: 5, check: 30 * time.Second, window: time.Minute,
 			cooldown: 20 * time.Minute, p99Limit: 1000, maxErrRate: 0.005, minRateRatio: 0.9,
+			actionTimeout: 20 * time.Minute,
 		},
 	}
 }
@@ -262,12 +263,12 @@ func TestSoakVerdict(t *testing.T) {
 	good := stressSummary{Total: stressResult{Puts: 1_440_000, Gets: 1_440_000, DurationS: 14400}}
 	pods := []corev1.Pod{riakPod("soak-0", 0, "")}
 
-	if bad := soakVerdict(o, good, 10, ready, pods); len(bad) != 0 {
+	if bad := soakVerdict(o, &soakState{}, good, 10, ready, pods); len(bad) != 0 {
 		t.Fatalf("a clean run must pass: %v", bad)
 	}
 	check := func(name string, sum stressSummary, clients int, cl *riakv1.RiakCluster, want string) {
 		t.Helper()
-		bad := strings.Join(soakVerdict(o, sum, clients, cl, pods), "\n")
+		bad := strings.Join(soakVerdict(o, &soakState{}, sum, clients, cl, pods), "\n")
 		if !strings.Contains(bad, want) {
 			t.Errorf("%s: want %q in %q", name, want, bad)
 		}
@@ -303,5 +304,40 @@ func TestTickLine(t *testing.T) {
 	unknown := st.tickLine(soakTestOpts(), soakSample{}, cl)
 	if !strings.Contains(unknown, "no client data") || !strings.Contains(unknown, "mem ?") {
 		t.Errorf("unknown values must say so: %q", unknown)
+	}
+}
+
+func TestCapSize(t *testing.T) {
+	ctx := context.Background()
+	nodes := []client.Object{
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "a"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+			{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "b"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+			{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "c"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+			{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}},
+	}
+	c := fake.NewClientBuilder().WithScheme(certScheme(t)).WithObjects(nodes...).Build()
+	st := &soakState{}
+	if got := st.capSize(ctx, c, 5); got != 3 {
+		t.Fatalf("5 wanted on 3 nodes must be capped to 3, got %d", got)
+	}
+	if got := st.capSize(ctx, c, 3); got != 3 {
+		t.Fatalf("got %d", got)
+	}
+	if got := st.capSize(ctx, c, 2); got != 2 {
+		t.Fatalf("a lower wish stays, got %d", got)
+	}
+}
+
+func TestSoakVerdict_reportsStalledActions(t *testing.T) {
+	o := soakTestOpts()
+	ready := &riakv1.RiakCluster{Spec: riakv1.RiakClusterSpec{Size: 3},
+		Status: riakv1.RiakClusterStatus{Phase: riakv1.PhaseReady, ReadyNodes: 3}}
+	good := stressSummary{Total: stressResult{Puts: 1_440_000, Gets: 1_440_000, DurationS: 14400}}
+	st := &soakState{stalls: []string{"the scale-out action left the cluster not ready for more than 20m0s"}}
+	bad := strings.Join(soakVerdict(o, st, good, 10, ready, nil), "\n")
+	if !strings.Contains(bad, "scale-out action left the cluster not ready") {
+		t.Fatalf("a stalled action must fail the run: %q", bad)
 	}
 }

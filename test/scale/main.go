@@ -141,6 +141,8 @@ func main() {
 		"ms; a sustained worst p99 above this scales the cluster out (0 = off)")
 	flag.Float64Var(&o.soak.maxErrRate, "soak-max-error-rate", 0.005, "tolerated share of failed operations")
 	flag.Float64Var(&o.soak.minRateRatio, "soak-min-rate", 0.9, "share of -soak-rate the clients must sustain")
+	flag.DurationVar(&o.soak.actionTimeout, "soak-action-timeout", 20*time.Minute,
+		"a scaling action that leaves the cluster not ready this long is reported as stalled")
 	flag.BoolVar(&o.soak.noScale, "soak-no-scale", false, "only observe: never change the cluster")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")

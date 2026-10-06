@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var t0 = time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
@@ -24,7 +26,7 @@ func testPolicy() soakPolicy {
 func samples(n int, mod func(i int, s *soakSample)) []soakSample {
 	out := make([]soakSample, n)
 	for i := range out {
-		out[i] = soakSample{At: t0.Add(time.Duration(i+1) * time.Minute), ClusterReady: true,
+		out[i] = soakSample{At: t0.Add(time.Duration(i+1) * time.Minute), ClusterReady: true, AllNodesUp: true,
 			Rate: 200, P99: 40, MemPct: 30}
 		if mod != nil {
 			mod(i, &out[i])
@@ -136,11 +138,28 @@ func TestDecide(t *testing.T) {
 			hist: samples(8, func(i int, s *soakSample) { s.P99 = 900 }),
 		},
 		{
-			name: "nothing happens while the cluster is not ready", mem: "4Gi", size: 3, want: actionNone,
+			name: "nothing happens while a node is down or restarting", mem: "4Gi", size: 3, want: actionNone,
 			hist: samples(8, func(i int, s *soakSample) {
 				s.P99 = 900
-				s.ClusterReady = i != 7
+				s.OOMKills = 1
+				s.AllNodesUp = i != 7
 			}),
+		},
+		{
+			// The smoke test's failure: a scale-out that cannot be scheduled leaves the cluster "not ready"
+			// for good. Memory pressure must still be handled; adding yet another node must not be tried.
+			name: "memory is raised even when a node cannot be scheduled", mem: "4Gi", size: 4, want: actionMemory,
+			hist: samples(6, func(i int, s *soakSample) { s.MemPct = 90; s.ClusterReady = false }),
+		},
+		{
+			name: "an OOM kill with a stuck node and memory at its cap does not add another", mem: "16Gi", size: 4,
+			want: actionNone,
+			hist: samples(6, func(i int, s *soakSample) { s.OOMKills = 1; s.ClusterReady = false }),
+		},
+		{
+			name: "slowness does not scale out while the cluster is not fully ready", mem: "4Gi", size: 4,
+			want: actionNone,
+			hist: samples(8, func(i int, s *soakSample) { s.P99 = 900; s.ClusterReady = false }),
 		},
 		{
 			name: "cooldown holds back a second action", mem: "4Gi", size: 3, want: actionNone,
@@ -248,5 +267,81 @@ func TestParseAndAggregateWindows(t *testing.T) {
 	// A client that stopped logging is ignored.
 	if _, _, _, n := aggregateWindows(got, time.Unix(1000+3600, 0), 2*time.Minute); n != 0 {
 		t.Fatalf("stale windows must be ignored, n=%d", n)
+	}
+}
+
+func node(name string, ready, unschedulable bool) corev1.Node {
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	return corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:   corev1.NodeSpec{Unschedulable: unschedulable},
+		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: status}}}}
+}
+
+func TestSchedulableNodes(t *testing.T) {
+	nodes := []corev1.Node{node("a", true, false), node("b", true, false), node("c", true, false),
+		node("cordoned", true, true), node("down", false, false), {ObjectMeta: metav1.ObjectMeta{Name: "nostatus"}}}
+	if got := schedulableNodes(nodes); got != 3 {
+		t.Fatalf("got %d, want 3 (cordoned, NotReady and status-less nodes cannot run a Riak pod)", got)
+	}
+}
+
+func pod(name, node string, ready bool, deleting bool) corev1.Pod {
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	p := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: corev1.PodSpec{NodeName: node},
+		Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}}}
+	if deleting {
+		now := metav1.Now()
+		p.DeletionTimestamp = &now
+	}
+	return p
+}
+
+func TestNodesUp(t *testing.T) {
+	up := []corev1.Pod{pod("a", "n1", true, false), pod("b", "n2", true, false)}
+	if !nodesUp(up) {
+		t.Fatal("two ready pods are up")
+	}
+	// The pod of a scale-out that cannot be placed: Pending, never ran. It is not "down".
+	if !nodesUp(append(up, pod("c", "", false, false))) {
+		t.Fatal("an unscheduled pod must be ignored")
+	}
+	if nodesUp(append(up, pod("c", "n3", false, false))) {
+		t.Fatal("a scheduled pod that is not ready is down")
+	}
+	if nodesUp(append(up, pod("c", "n3", true, true))) {
+		t.Fatal("a terminating pod is going down")
+	}
+	if !nodesUp(nil) {
+		t.Fatal("no pods: nothing is down")
+	}
+}
+
+func TestCheckStall(t *testing.T) {
+	st := &soakState{started: time.Now()}
+	notReady := soakSample{ClusterReady: false}
+	st.checkStall(notReady, time.Minute) // no action yet
+	if st.stalled {
+		t.Fatal("nothing to stall without an action")
+	}
+	st.actionAt, st.actionKind = time.Now().Add(-30*time.Second), actionScaleOut
+	st.checkStall(notReady, time.Minute)
+	if st.stalled {
+		t.Fatal("not yet past the timeout")
+	}
+	st.actionAt = time.Now().Add(-2 * time.Minute)
+	st.checkStall(soakSample{ClusterReady: true}, time.Minute)
+	if st.stalled {
+		t.Fatal("a ready cluster is not stalled")
+	}
+	st.checkStall(notReady, time.Minute)
+	st.checkStall(notReady, time.Minute) // reported once
+	if !st.stalled || len(st.stalls) != 1 || len(st.timeline) != 1 {
+		t.Fatalf("stalled=%v stalls=%v timeline=%v", st.stalled, st.stalls, st.timeline)
 	}
 }

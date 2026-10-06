@@ -49,30 +49,31 @@ const (
 
 // soakOpts are the soak test's flags.
 type soakOpts struct {
-	enabled      bool
-	duration     time.Duration
-	rate         int // operations per second, all clients together
-	users        int
-	buckets      int
-	threads      int // per client
-	keyspace     int // keys per thread and bucket
-	readRatio    float64
-	valueSize    int
-	nVal         int
-	pr, pw       int
-	storage      string
-	memory       string
-	maxMemory    string
-	cpu          string
-	replicas     int
-	maxReplicas  int
-	check        time.Duration
-	window       time.Duration
-	cooldown     time.Duration
-	p99Limit     float64
-	maxErrRate   float64
-	minRateRatio float64
-	noScale      bool
+	enabled       bool
+	duration      time.Duration
+	rate          int // operations per second, all clients together
+	users         int
+	buckets       int
+	threads       int // per client
+	keyspace      int // keys per thread and bucket
+	readRatio     float64
+	valueSize     int
+	nVal          int
+	pr, pw        int
+	storage       string
+	memory        string
+	maxMemory     string
+	cpu           string
+	replicas      int
+	maxReplicas   int
+	check         time.Duration
+	window        time.Duration
+	cooldown      time.Duration
+	p99Limit      float64
+	maxErrRate    float64
+	minRateRatio  float64
+	noScale       bool
+	actionTimeout time.Duration
 }
 
 func (s soakOpts) perClientRate() float64 { return float64(s.rate) / float64(s.users) }
@@ -266,6 +267,11 @@ type soakState struct {
 	started   time.Time
 	diskPods  map[string]float64
 	tick      int
+
+	actionAt   time.Time // when the last action was applied
+	actionKind string
+	stalled    bool
+	stalls     []string
 }
 
 type soakEvent struct {
@@ -398,7 +404,7 @@ func (st *soakState) sampleOnce(ctx context.Context, c client.Client, o opts) (s
 	}
 	top, _ := kubectlOut(30*time.Second, "top", "pod", "-n", o.namespace, "-l", "app=riak,cluster="+soakCluster,
 		"--containers", "--no-headers")
-	s := soakSample{At: time.Now(), ClusterReady: soakReady(cl)}
+	s := soakSample{At: time.Now(), ClusterReady: soakReady(cl), AllNodesUp: nodesUp(pods.Items)}
 	s.MemPct = st.observePods(pods.Items, memLimit(cl), top)
 	s.OOMKills, s.Restarts = st.oomKills, st.restarts
 
@@ -484,8 +490,9 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 	s := o.soak
 	limit := st.started.Add(s.duration + 70*time.Minute)
 	mem := resource.MustParse(s.maxMemory)
+	maxSize := st.capSize(ctx, c, s.maxReplicas)
 	st.scaler = soakScaler{policy: soakPolicy{
-		TargetRate: float64(s.rate), MaxMemory: mem, MaxSize: int32(s.maxReplicas), Cooldown: s.cooldown,
+		TargetRate: float64(s.rate), MaxMemory: mem, MaxSize: maxSize, Cooldown: s.cooldown,
 		P99Limit: s.p99Limit, MinRateRatio: s.minRateRatio, MaxErrRate: s.maxErrRate,
 	}}
 	for {
@@ -502,6 +509,7 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 				st.rateN++
 			}
 			fmt.Println(st.tickLine(o, sample, cl))
+			st.checkStall(sample, s.actionTimeout)
 			if !s.noScale && time.Since(st.started) < s.duration {
 				a := st.scaler.decide(time.Now(), st.hist, memLimit(cl), cl.Spec.Size)
 				if a.Kind != actionNone {
@@ -510,6 +518,7 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 						st.note("applying the %s action failed: %v", a.Kind, err)
 					} else {
 						st.scaler.applied(time.Now(), sample.OOMKills)
+						st.actionAt, st.actionKind, st.stalled = time.Now(), a.Kind, false
 						if a.Kind == actionMemory {
 							st.note("raised the memory limit of every node to %s", a.Memory.String())
 						} else {
@@ -531,6 +540,35 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 		}
 		time.Sleep(s.check)
 	}
+}
+
+// capSize limits how far the cluster may grow: no further than -soak-max-replicas, and no further
+// than there are schedulable Kubernetes nodes, because Riak pods need one node each.
+func (st *soakState) capSize(ctx context.Context, c client.Client, wanted int) int32 {
+	nodes := &corev1.NodeList{}
+	if err := c.List(ctx, nodes); err != nil {
+		fmt.Printf("  could not list the Kubernetes nodes (%v); not limiting the cluster size by them\n", err)
+		return int32(wanted)
+	}
+	n := schedulableNodes(nodes.Items)
+	size := min(wanted, n)
+	if size < wanted {
+		fmt.Printf("  scale-out is limited to %d nodes: only %d schedulable Kubernetes nodes, "+
+			"and a Riak node needs one each\n", size, n)
+	}
+	return int32(size)
+}
+
+// checkStall notes an action that left the cluster not ready for too long, once.
+func (st *soakState) checkStall(s soakSample, timeout time.Duration) {
+	if st.actionAt.IsZero() || s.ClusterReady || st.stalled || time.Since(st.actionAt) < timeout {
+		return
+	}
+	st.stalled = true
+	st.note("STALLED: the cluster has not become ready %s after the %s action",
+		time.Since(st.actionAt).Round(time.Second), st.actionKind)
+	st.stalls = append(st.stalls, fmt.Sprintf("the %s action left the cluster not ready for more than %s",
+		st.actionKind, timeout))
 }
 
 // soakSetup creates the cluster, buckets and users and waits until clients can connect.
@@ -645,7 +683,7 @@ func finishSoak(ctx context.Context, c client.Client, o opts, st *soakState, mon
 	_ = c.List(ctx, pods, client.InNamespace(o.namespace), client.MatchingLabels{"app": "riak", "cluster": soakCluster})
 
 	printSoakReport(o, st, sum, results, cl)
-	problems = append(problems, soakVerdict(o, sum, len(results), cl, pods.Items)...)
+	problems = append(problems, soakVerdict(o, st, sum, len(results), cl, pods.Items)...)
 
 	if err := verifyEventually(ctx, c, o, "after the soak test"); err != nil {
 		problems = append(problems, err.Error())
@@ -665,7 +703,9 @@ func finishSoak(ctx context.Context, c client.Client, o opts, st *soakState, mon
 
 // soakVerdict turns the results into problems. OOM kills are reported, not failed on, as long as
 // the scaler responded and the cluster recovered: that is what it is for.
-func soakVerdict(o opts, sum stressSummary, clients int, cl *riakv1.RiakCluster, pods []corev1.Pod) []string {
+func soakVerdict(
+	o opts, st *soakState, sum stressSummary, clients int, cl *riakv1.RiakCluster, pods []corev1.Pod,
+) []string {
 	s := o.soak
 	var bad []string
 	if clients != s.users {
@@ -689,6 +729,7 @@ func soakVerdict(o opts, sum stressSummary, clients int, cl *riakv1.RiakCluster,
 				avg, s.minRateRatio*100, s.rate))
 		}
 	}
+	bad = append(bad, st.stalls...)
 	if !soakReady(cl) {
 		bad = append(bad, fmt.Sprintf("the cluster ended not ready (%s, %d/%d nodes)", cl.Status.Phase,
 			cl.Status.ReadyNodes, cl.Spec.Size))
