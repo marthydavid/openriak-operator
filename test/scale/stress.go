@@ -126,6 +126,7 @@ type stressResult struct {
 	FinalCorrupt int64                    `json:"final_corrupt"`
 	DurationS    float64                  `json:"duration_s"`
 	OpsPerS      float64                  `json:"ops_per_s"`
+	Late         int64                    `json:"late"`
 	Latency      map[string]stressLatency `json:"latency_ms"`
 	ErrorKinds   map[string]int64         `json:"error_kinds"`
 }
@@ -167,6 +168,7 @@ func summarize(results []stressResult) stressSummary {
 		s.Total.FinalLost += r.FinalLost
 		s.Total.FinalCorrupt += r.FinalCorrupt
 		s.Total.OpsPerS += r.OpsPerS
+		s.Total.Late += r.Late
 		if r.DurationS > s.Total.DurationS {
 			s.Total.DurationS = r.DurationS
 		}

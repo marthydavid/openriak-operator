@@ -71,6 +71,8 @@ type opts struct {
 	externalUsers int
 	extCA         *extCA
 
+	soak soakOpts
+
 	verify      bool
 	verifyOnly  bool
 	mutate      bool
@@ -111,6 +113,35 @@ func main() {
 	flag.IntVar(&o.externalUsers, "external-users", 0,
 		"of -users per cluster, how many authenticate with a certificate from an external CA (the harness plays the CA) "+
 			"instead of cert-manager; turns on cluster TLS and verifies both certificate patterns")
+	flag.BoolVar(&o.soak.enabled, "soak", false,
+		"run the soak test instead: one cluster under a constant load for hours, watched for OOM kills and scaled as needed")
+	flag.DurationVar(&o.soak.duration, "soak-duration", 4*time.Hour, "how long the clients hold the load")
+	flag.IntVar(&o.soak.rate, "soak-rate", 200, "constant operations per second, all clients together")
+	flag.IntVar(&o.soak.users, "soak-users", 10, "cert-auth users, each running one client")
+	flag.IntVar(&o.soak.buckets, "soak-buckets", 10, "buckets (each with its own bucket type) every client rotates over")
+	flag.IntVar(&o.soak.threads, "soak-threads", 4, "connections per client")
+	flag.IntVar(&o.soak.keyspace, "soak-keyspace", 2000,
+		"keys each client thread keeps per bucket; later writes overwrite")
+	flag.Float64Var(&o.soak.readRatio, "soak-read-ratio", 0.5, "fraction of operations that are reads")
+	flag.IntVar(&o.soak.valueSize, "soak-value-size", 16384, "bytes per object")
+	flag.IntVar(&o.soak.nVal, "soak-nval", 3, "bucket n_val")
+	flag.IntVar(&o.soak.pr, "soak-pr", 2, "primary read quorum sent with every read (and set as the bucket default)")
+	flag.IntVar(&o.soak.pw, "soak-pw", 2, "primary write quorum sent with every write (and set as the bucket default)")
+	flag.StringVar(&o.soak.storage, "soak-storage", "300Gi", "data volume size of each node (spec.storageSize)")
+	flag.StringVar(&o.soak.memory, "soak-memory", "4Gi", "initial memory request and limit of each Riak node")
+	flag.StringVar(&o.soak.maxMemory, "soak-max-memory", "16Gi",
+		"the scaler never raises a node's memory limit above this")
+	flag.StringVar(&o.soak.cpu, "soak-cpu", "2", "CPU request of each Riak node")
+	flag.IntVar(&o.soak.replicas, "soak-replicas", 3, "initial number of nodes")
+	flag.IntVar(&o.soak.maxReplicas, "soak-max-replicas", 5, "the scaler never grows the cluster beyond this")
+	flag.DurationVar(&o.soak.check, "soak-check", 30*time.Second, "how often the cluster and the clients are sampled")
+	flag.DurationVar(&o.soak.window, "soak-window", time.Minute, "interval of the clients' own throughput/latency lines")
+	flag.DurationVar(&o.soak.cooldown, "soak-cooldown", 20*time.Minute, "minimum time between two scaling actions")
+	flag.Float64Var(&o.soak.p99Limit, "soak-p99", 1000,
+		"ms; a sustained worst p99 above this scales the cluster out (0 = off)")
+	flag.Float64Var(&o.soak.maxErrRate, "soak-max-error-rate", 0.005, "tolerated share of failed operations")
+	flag.Float64Var(&o.soak.minRateRatio, "soak-min-rate", 0.9, "share of -soak-rate the clients must sustain")
+	flag.BoolVar(&o.soak.noScale, "soak-no-scale", false, "only observe: never change the cluster")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
 	flag.BoolVar(&o.stress, "stress", false,
@@ -153,6 +184,11 @@ const minRingSize = 128
 
 // validateOpts rejects option combinations that cannot work, before touching the cluster.
 func validateOpts(o opts) error {
+	if o.soak.enabled {
+		if err := validateSoak(o.soak); err != nil {
+			return err
+		}
+	}
 	if o.ringSize < minRingSize || o.ringSize&(o.ringSize-1) != 0 {
 		return fmt.Errorf("-ring-size %d: must be a power of two >= %d", o.ringSize, minRingSize)
 	}
@@ -192,6 +228,9 @@ func run(o opts) error {
 		return err
 	}
 	ctx := context.Background()
+	if o.soak.enabled {
+		return runSoak(ctx, c, o)
+	}
 	if o.verifyOnly {
 		return runVerifyOnly(ctx, c, o)
 	}
