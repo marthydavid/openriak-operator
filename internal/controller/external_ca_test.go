@@ -246,6 +246,60 @@ var _ = Describe("External client CAs", func() {
 			Expect(res.RequeueAfter.Seconds()).To(BeNumerically("==", 30))
 		})
 
+		It("serves a cert-manager user and an external-CA user side by side on one cluster", func() {
+			readyCluster()
+			Expect(k8sClient.Create(ctx, secret("extca-user-cert", map[string][]byte{"tls.crt": extCA.clientCert(GinkgoT(), "alice")}))).To(Succeed())
+			mkUser()
+			const cmUserName = "extca-cm-user"
+			Expect(k8sClient.Create(ctx, &riakv1.RiakUser{
+				ObjectMeta: metav1.ObjectMeta{Name: cmUserName, Namespace: ns},
+				Spec: riakv1.RiakUserSpec{
+					ClusterName: clusterName,
+					Username:    "bob",
+					CertificateRef: &riakv1.UserCertificateRef{
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+					},
+				},
+			})).To(Succeed())
+			DeferCleanup(func() {
+				cm := &riakv1.RiakUser{ObjectMeta: metav1.ObjectMeta{Name: cmUserName, Namespace: ns}}
+				_ = k8sClient.Delete(ctx, cm)
+				ur := &RiakUserReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(),
+					Executor: riak.NewExecutorWithRunner(logr.Discard(), noopRunner)}
+				_, _ = ur.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: cmUserName, Namespace: ns}})
+				cert := &unstructured.Unstructured{}
+				cert.SetGroupVersionKind(certificateGVK)
+				cert.SetName(userCertName(cmUserName))
+				cert.SetNamespace(ns)
+				_ = k8sClient.Delete(ctx, cert)
+			})
+			reconcileTheUser()
+			ur := &RiakUserReconciler{Client: k8sClient, Scheme: k8sClient.Scheme(),
+				Executor: riak.NewExecutorWithRunner(logr.Discard(), noopRunner)}
+			for i := 0; i < 2; i++ {
+				_, err := ur.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: cmUserName, Namespace: ns}})
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			By("both users being provisioned in Riak")
+			cmUser := &riakv1.RiakUser{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cmUserName, Namespace: ns}, cmUser)).To(Succeed())
+			Expect(cmUser.Status.Phase).To(Equal(riakv1.UserPhaseReady), cmUser.Status.Error)
+			Expect(get().Status.Phase).To(Equal(riakv1.UserPhaseReady))
+
+			By("only the cert-manager user getting a Certificate, and waiting on cert-manager to issue it")
+			cert := &unstructured.Unstructured{}
+			cert.SetGroupVersionKind(certificateGVK)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: userCertName(cmUserName), Namespace: ns}, cert)).To(Succeed())
+			Expect(cmUser.Status.CertificateReady).To(BeFalse())
+			Expect(cmUser.Status.CertificateError).To(ContainSubstring("not been issued"))
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{Name: userCertName(userName), Namespace: ns},
+				cert))).To(BeTrue())
+
+			By("the external user being certificate-ready from its own Secret")
+			Expect(get().Status.CertificateReady).To(BeTrue())
+		})
+
 		It("reports a missing Secret and recovers once it appears", func() {
 			readyCluster()
 			mkUser()
