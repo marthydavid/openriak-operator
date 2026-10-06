@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -ldflags="-w -s" -o manager cmd/main.go
 
 # Final image — alpine is multi-arch, kubectl is available for amd64 and arm64.
-FROM alpine:3.20
+FROM alpine:3.24
 RUN apk --no-cache add ca-certificates kubectl
 
 WORKDIR /
