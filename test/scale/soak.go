@@ -74,6 +74,7 @@ type soakOpts struct {
 	minRateRatio  float64
 	noScale       bool
 	actionTimeout time.Duration
+	memPressure   float64
 }
 
 func (s soakOpts) perClientRate() float64 { return float64(s.rate) / float64(s.users) }
@@ -94,6 +95,8 @@ func validateSoak(s soakOpts) error {
 		return fmt.Errorf("-soak-replicas must be at least 3 (n_val 3, pw 2) and not above -soak-max-replicas")
 	case s.nVal < 1 || s.pr > s.nVal || s.pw > s.nVal:
 		return fmt.Errorf("-soak-nval %d: pr/pw (%d/%d) cannot exceed it", s.nVal, s.pr, s.pw)
+	case s.memPressure <= 0 || s.memPressure > 1:
+		return fmt.Errorf("-soak-mem-pressure %v: must be in (0, 1]", s.memPressure)
 	case s.duration < 2*time.Minute:
 		return fmt.Errorf("-soak-duration must be at least 2m")
 	}
@@ -341,6 +344,10 @@ func (st *soakState) recordEvents(ns string) {
 		if st.seenEvent[e.Metadata.UID] || !strings.HasPrefix(e.InvolvedObject.Name, "soak") {
 			continue
 		}
+		// A client Job ends "failed" when any operation failed: that is in its RESULT, not news.
+		if strings.HasPrefix(e.InvolvedObject.Name, "soak-client") && e.Reason == "BackoffLimitExceeded" {
+			continue
+		}
 		st.seenEvent[e.Metadata.UID] = true
 		ev := st.events[e.Reason]
 		if ev == nil {
@@ -494,6 +501,7 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 	st.scaler = soakScaler{policy: soakPolicy{
 		TargetRate: float64(s.rate), MaxMemory: mem, MaxSize: maxSize, Cooldown: s.cooldown,
 		P99Limit: s.p99Limit, MinRateRatio: s.minRateRatio, MaxErrRate: s.maxErrRate,
+		MemPressure: s.memPressure,
 	}}
 	for {
 		sample, cl, err := st.sampleOnce(ctx, c, o)
@@ -730,6 +738,10 @@ func soakVerdict(
 		}
 	}
 	bad = append(bad, st.stalls...)
+	if steady, noisy := steadyErrors(st.hist); steady > 0 && float64(noisy)/float64(steady) > 0.05 {
+		bad = append(bad, fmt.Sprintf("%d of %d samples taken while the cluster was healthy saw more than 1%% failed "+
+			"operations (restarts are excluded)", noisy, steady))
+	}
 	if !soakReady(cl) {
 		bad = append(bad, fmt.Sprintf("the cluster ended not ready (%s, %d/%d nodes)", cl.Status.Phase,
 			cl.Status.ReadyNodes, cl.Spec.Size))
@@ -768,6 +780,9 @@ func printSoakReport(o opts, st *soakState, sum stressSummary, results []stressR
 	for _, k := range kinds {
 		fmt.Printf("               error x%d: %s\n", sum.Total.ErrorKinds[k], k)
 	}
+	steady, noisy := steadyErrors(st.hist)
+	fmt.Printf("steady state   %d samples with every node up, %d of them with more than 1%% failed operations "+
+		"(restart windows excluded)\n", steady, noisy)
 	fmt.Printf("riak           OOM kills %d, container restarts %d, peak memory %.0f%% of the limit, "+
 		"peak disk %.1f%% of %s\n",
 		st.oomKills, st.restarts, st.peak.mem, st.peak.disk, s.storage)

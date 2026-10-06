@@ -169,6 +169,12 @@ func summarize(results []stressResult) stressSummary {
 		s.Total.FinalCorrupt += r.FinalCorrupt
 		s.Total.OpsPerS += r.OpsPerS
 		s.Total.Late += r.Late
+		for kind, n := range r.ErrorKinds {
+			if s.Total.ErrorKinds == nil {
+				s.Total.ErrorKinds = map[string]int64{}
+			}
+			s.Total.ErrorKinds[kind] += n
+		}
 		if r.DurationS > s.Total.DurationS {
 			s.Total.DurationS = r.DurationS
 		}

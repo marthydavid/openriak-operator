@@ -194,6 +194,28 @@ func (s *soakScaler) decide(now time.Time, hist []soakSample, memory resource.Qu
 	return none("healthy")
 }
 
+// steadyErrThreshold is the share of failed operations above which a healthy-cluster sample is "noisy".
+const steadyErrThreshold = 0.01
+
+// steadyErrors looks at the samples taken while the cluster was healthy: every desired node ready,
+// no node down, and the sample before it healthy too (the clients need a moment to reconnect after
+// a restart). It returns how many such samples there are and how many of them saw more than
+// threshold failed operations. A restart makes quorums fail for a while, which is expected; errors
+// in steady state are not.
+func steadyErrors(hist []soakSample) (steady, bad int) {
+	for i := 1; i < len(hist); i++ {
+		healthy := func(s soakSample) bool { return s.ClusterReady && s.AllNodesUp }
+		if !healthy(hist[i]) || !healthy(hist[i-1]) || hist[i].Rate == 0 {
+			continue
+		}
+		steady++
+		if hist[i].ErrRate > steadyErrThreshold {
+			bad++
+		}
+	}
+	return steady, bad
+}
+
 // applied records that an action was taken, so later decisions only consider newer samples.
 func (s *soakScaler) applied(now time.Time, oomKills int) {
 	s.lastAction = now

@@ -202,3 +202,23 @@ func TestRiakPodProblems(t *testing.T) {
 }
 
 func objMeta(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: name} }
+
+func TestSummarize_mergesErrorKinds(t *testing.T) {
+	sum := summarize([]stressResult{
+		{Errors: 3, ErrorKinds: map[string]int64{"RiakError: timeout": 2, "EOFError: closed": 1}},
+		{Errors: 4, ErrorKinds: map[string]int64{"RiakError: timeout": 3, "RiakError: pr_val_unsatisfied": 1}},
+		{},
+	})
+	want := map[string]int64{"RiakError: timeout": 5, "EOFError: closed": 1, "RiakError: pr_val_unsatisfied": 1}
+	if len(sum.Total.ErrorKinds) != len(want) {
+		t.Fatalf("got %v", sum.Total.ErrorKinds)
+	}
+	for k, n := range want {
+		if sum.Total.ErrorKinds[k] != n {
+			t.Errorf("%s: got %d want %d", k, sum.Total.ErrorKinds[k], n)
+		}
+	}
+	if sum.Total.Errors != 7 {
+		t.Errorf("errors %d", sum.Total.Errors)
+	}
+}

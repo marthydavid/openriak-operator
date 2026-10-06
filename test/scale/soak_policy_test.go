@@ -345,3 +345,24 @@ func TestCheckStall(t *testing.T) {
 		t.Fatalf("stalled=%v stalls=%v timeline=%v", st.stalled, st.stalls, st.timeline)
 	}
 }
+
+func TestSteadyErrors(t *testing.T) {
+	ok := soakSample{ClusterReady: true, AllNodesUp: true, Rate: 200}
+	hist := []soakSample{
+		ok, ok, ok,
+		{ClusterReady: false, AllNodesUp: false, Rate: 170, ErrRate: 0.15}, // a node is restarting
+		{ClusterReady: true, AllNodesUp: true, Rate: 190, ErrRate: 0.05},   // back, clients still reconnecting
+		ok, ok,
+		{ClusterReady: true, AllNodesUp: true, Rate: 200, ErrRate: 0.03}, // errors while healthy
+		{ClusterReady: true, AllNodesUp: true},                           // no client data: not counted
+	}
+	steady, bad := steadyErrors(hist)
+	// Counted: hist[1], hist[2], hist[5], hist[6], hist[7]. Not: hist[0] (no predecessor), the restart,
+	// the sample right after it, and the sample without client data.
+	if steady != 5 || bad != 1 {
+		t.Fatalf("steady=%d bad=%d, want 5 and 1", steady, bad)
+	}
+	if s, b := steadyErrors(nil); s != 0 || b != 0 {
+		t.Fatal("no samples")
+	}
+}
