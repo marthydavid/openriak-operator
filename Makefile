@@ -234,3 +234,15 @@ scale-test: ## Run the operator load-test harness against the current kubeconfig
 .PHONY: sync-dashboard
 sync-dashboard: ## Copy the Grafana dashboard example into the Helm chart (CI fails when they differ).
 	cp examples/metrics/grafana-dashboard.json charts/openriak-operator/dashboards/riak-kv.json
+
+.PHONY: soak-test
+soak-test: ## Hold a constant load on one cluster for hours (see docs/scaling.md). Vars: DURATION (4h), RATE (200), STORAGE_CLASS, STORAGE (300Gi).
+	go run ./test/scale -soak \
+		-soak-duration $(or $(DURATION),4h) \
+		-soak-rate $(or $(RATE),200) \
+		-soak-storage $(or $(STORAGE),300Gi) \
+		-storage-class $(or $(STORAGE_CLASS),standard)
+
+.PHONY: test-stressapp
+test-stressapp: ## Offline unit tests of the example stress client (no Riak needed).
+	python3 -m unittest examples/stressapp/test_riak_stress.py
