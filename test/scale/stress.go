@@ -95,7 +95,7 @@ func stressUser(ns, cluster string) *riakv1.RiakUser {
 			ClusterName: cluster,
 			Username:    stressUsername(cluster),
 			CertificateRef: &riakv1.UserCertificateRef{
-				IssuerRef: riakv1.CertIssuerRef{Name: "scale-issuer", Kind: "Issuer"},
+				IssuerRef: &riakv1.CertIssuerRef{Name: "scale-issuer", Kind: "Issuer"},
 			},
 			Grants: []riakv1.Grant{{
 				Resource: "bucket", BucketName: stressBucketType(cluster), Permission: "admin",

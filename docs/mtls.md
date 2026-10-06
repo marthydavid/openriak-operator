@@ -201,6 +201,80 @@ For a dependency-free reference, `test/e2e/scripts/pb_cert_auth_check.py` speaks
 Riak protobuf STARTTLS handshake directly (standard library only) and performs an
 authenticated write/read — useful for verifying cert auth from a debug pod.
 
+## Client certificates from an external CA
+
+Client certificates do not have to come from cert-manager. If your users' certificates are
+issued by another CA (a corporate PKI, Vault, ...), tell the cluster to **trust that CA** and
+point each `RiakUser` at the **Secret that already holds its certificate**.
+
+```yaml
+apiVersion: riak.openriak.io/v1
+kind: RiakCluster
+metadata:
+  name: my-cluster
+spec:
+  size: 3
+  tls:
+    enabled: true
+    certManager:
+      issuerName: riak-ca-issuer
+    additionalClientCAs:            # extra CAs Riak trusts for client certificates
+      - secretRef:
+          name: corp-pki-root
+          key: ca.crt
+      # - configMapRef:             # e.g. a bundle published by trust-manager
+      #     name: corp-trust-bundle
+      #     key: ca-bundle.pem
+---
+apiVersion: riak.openriak.io/v1
+kind: RiakUser
+metadata:
+  name: app-ext-user
+spec:
+  clusterName: my-cluster
+  username: appuser                 # must equal the certificate's CommonName
+  certificateRef:
+    externalSecretName: app-ext-user-cert   # instead of issuerRef
+  grants:
+    - resource: bucket
+      bucketName: mydata
+      permission: read
+```
+
+**What the operator does**
+
+- It merges the cluster's own CA with every `additionalClientCAs` entry (in that order, without
+  duplicates) into the Secret `<cluster>-tls-trust` and mounts it as Riak's `ca.crt`
+  (`ssl.cacertfile`). The server certificate and key still come from cert-manager. An entry is a
+  Secret or ConfigMap key holding one or more PEM `CERTIFICATE` blocks. Certificates are public,
+  so nothing sensitive is copied.
+- For a RiakUser with `externalSecretName` it creates **no** `Certificate`. It still creates the
+  Riak user and its `certificate` source, then validates the Secret's `tls.crt` (leaf first, then
+  any intermediates): the CommonName equals `spec.username`, the `client auth` usage is present,
+  it is currently valid, and it **chains to a CA Riak trusts**. The result is in
+  `status.certificateReady` / `status.certificateError` and the `CertificateReady` condition, so
+  a certificate Riak would reject shows up in Kubernetes instead of as a failed connection. A
+  valid external certificate is re-checked every 10 minutes (sooner when it is about to expire).
+- `issuerRef` and `externalSecretName` are mutually exclusive; `secretName` only applies to
+  `issuerRef`.
+
+`status.tlsStatus.trustedClientCAs` shows how many distinct CAs are trusted, and
+`status.tlsStatus.trustBundleError` explains a bad `additionalClientCAs` entry (missing
+Secret/ConfigMap/key, no PEM certificate). A bad entry does not fail the reconcile: pods keep
+their current bundle.
+
+!!! note "Requirements and limits"
+    - The operator needs RBAC to read Secrets (`get`) and to write the trust Secret
+      (`create`/`update`); the chart and `config/rbac` include it. Secrets are read uncached, so no
+      informer over every Secret in the cluster is started.
+    - The kubelet updates the mounted bundle by itself after a CA change. Riak's `ssl` stack may
+      read it at start-up only, so **restart the Riak pods after changing the trusted CAs** (it
+      has not been verified that a running node picks up a new `ca.crt`).
+    - There is no CRL/OCSP check (Riak runs with `check_crl=off`), so revoke access by removing the
+      RiakUser or distrusting the CA.
+    - The server (node) certificate still has to come from cert-manager; external server
+      certificates are not supported yet.
+
 ## Troubleshooting
 
 **`RiakUser` stuck in `Failed` with a certificate error** — check that the

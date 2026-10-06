@@ -134,7 +134,7 @@ var _ = Describe("Resource status reporting", func() {
 					ClusterName: clusterName,
 					Username:    "ivan",
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer"},
 					},
 				},
 			}
@@ -546,7 +546,7 @@ var _ = Describe("Resource status reporting", func() {
 					Username:    "judy",
 					Grants:      grants,
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer"},
 					},
 				},
 			}
@@ -611,7 +611,7 @@ var _ = Describe("Resource status reporting", func() {
 					Username:    "mallory",
 					Grants:      []riakv1.Grant{{Resource: "bucket", BucketName: "orders", Permission: "write"}},
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer"},
 					},
 				},
 			}

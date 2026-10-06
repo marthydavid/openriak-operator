@@ -43,6 +43,8 @@ type RiakUserReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Executor *riak.Executor // if nil, a real executor is created per reconcile
+	// APIReader reads Secrets and ConfigMaps uncached; nil falls back to Client.
+	APIReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakusers,verbs=get;list;watch;create;update;patch;delete
@@ -51,6 +53,7 @@ type RiakUserReconciler struct {
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 
 // userDeleteGracePeriod bounds how long a RiakUser deletion waits for the Riak
@@ -239,7 +242,7 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// it is reported separately from the phase: Ready means the Riak-side identity
 	// is provisioned, while certificateReady tells clients whether the client
 	// certificate they authenticate with actually exists yet.
-	certReady, certReason := fetchCertificateReadiness(ctx, r.Client, userCertName(user.Name), user.Namespace)
+	certReady, certReason, notAfter := r.userCertificateReadiness(ctx, user, cluster)
 
 	// The Riak-side identity exists now, so a failed status write is retried
 	// rather than swallowed: every call above is idempotent.
@@ -251,11 +254,40 @@ func (r *RiakUserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// Requeue until the certificate is observed issued so status.certificateReady
 	// converges; every Riak-side call above is idempotent, and the requeue stops
 	// as soon as cert-manager reports the certificate Ready.
-	if !certReady {
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
+	return certRequeue(user, certReady, notAfter), nil
+}
 
-	return ctrl.Result{}, nil
+// userCertificateReadiness reports whether the user's client certificate is
+// usable: the cert-manager Certificate is Ready, or, for an external
+// certificate (spec.certificateRef.externalSecretName), the Secret holds a
+// certificate with CN == username that chains to a CA the cluster trusts. The
+// expiry is only set for external certificates.
+func (r *RiakUserReconciler) userCertificateReadiness(
+	ctx context.Context, user *riakv1.RiakUser, cluster *riakv1.RiakCluster,
+) (bool, string, time.Time) {
+	if user.Spec.CertificateRef.IssuerRef == nil {
+		return externalCertificateReadiness(ctx, reader(r.APIReader, r.Client), user, cluster, time.Now())
+	}
+	ready, reason := fetchCertificateReadiness(ctx, r.Client, userCertName(user.Name), user.Namespace)
+	return ready, reason, time.Time{}
+}
+
+// certRequeue decides when to look at the certificate again. A pending one is
+// polled every 30s. A cert-manager certificate that is Ready needs nothing more
+// (cert-manager renews it). An external one is re-validated periodically, and
+// sooner when it is about to expire, so rotation or expiry reaches the status.
+func certRequeue(user *riakv1.RiakUser, ready bool, notAfter time.Time) ctrl.Result {
+	if !ready {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}
+	}
+	if user.Spec.CertificateRef.IssuerRef != nil {
+		return ctrl.Result{}
+	}
+	after := externalCertRecheck
+	if until := time.Until(notAfter); until > 0 && until < after {
+		after = until
+	}
+	return ctrl.Result{RequeueAfter: after}
 }
 
 // markUserReady records the provisioned Riak identity on the user's status: the
@@ -351,6 +383,9 @@ func (r *RiakUserReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrent in
 // certificate when spec.certificateRef is set. It is idempotent: a second call does nothing
 // if the Certificate already exists.
 func (r *RiakUserReconciler) reconcileUserCertificate(ctx context.Context, user *riakv1.RiakUser) error {
+	if user.Spec.CertificateRef.IssuerRef == nil {
+		return nil // externally issued: nothing for cert-manager to do
+	}
 	cert := buildUserCertificate(user.Name, user.Namespace, user.Spec.Username, user.Spec.CertificateRef)
 
 	if err := controllerutil.SetControllerReference(user, cert, r.Scheme); err != nil {

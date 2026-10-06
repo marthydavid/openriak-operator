@@ -489,7 +489,7 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 					ClusterName: cl,
 					Username:    fmt.Sprintf("%s_u%03d", cl, u),
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "scale-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "scale-issuer", Kind: "Issuer"},
 					},
 					Grants: randomGrants(rng, cl, o.buckets),
 				},

@@ -62,6 +62,17 @@ spec:
                   not supported). Riak authenticates the user by the certificate's CommonName, which
                   the operator sets to spec.username.
                 properties:
+                  externalSecretName:
+                    description: |-
+                      ExternalSecretName names an existing Secret (same namespace) holding the
+                      user's certificate, issued by an external CA, in tls.crt (leaf first, then
+                      any intermediates). The operator creates no Certificate; it validates the
+                      Secret (CommonName == spec.username, client-auth usage, not expired, chains
+                      to a CA Riak trusts) and reports the result in status.certificateReady. The
+                      issuing CA must be trusted by the cluster: list it in
+                      RiakCluster spec.tls.additionalClientCAs.
+                    minLength: 1
+                    type: string
                   issuerRef:
                     description: IssuerRef references the cert-manager Issuer or ClusterIssuer
                       to sign the certificate.
@@ -83,11 +94,15 @@ spec:
                   secretName:
                     description: |-
                       SecretName is the Kubernetes Secret where cert-manager stores the issued certificate.
-                      Defaults to <riakuser-name>-client-tls.
+                      Defaults to <riakuser-name>-client-tls. Only with issuerRef.
                     type: string
-                required:
-                - issuerRef
                 type: object
+                x-kubernetes-validations:
+                - message: set exactly one of issuerRef or externalSecretName
+                  rule: has(self.issuerRef) != has(self.externalSecretName)
+                - message: secretName only applies to issuerRef; an external Secret
+                    is named by externalSecretName
+                  rule: '!(has(self.externalSecretName) && has(self.secretName))'
               clusterName:
                 description: ClusterName is the name of the RiakCluster this user
                   belongs to.

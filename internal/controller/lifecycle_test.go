@@ -354,7 +354,7 @@ var _ = Describe("Resource lifecycle (scale up, add, delete)", func() {
 					Username:    username,
 					Grants:      grants,
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 				},
 			})).To(Succeed())
