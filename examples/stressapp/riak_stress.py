@@ -21,10 +21,19 @@ Output
   Progress lines every 10 s on stderr, and one final line on stdout:
       RESULT {"ops": ..., "puts": ..., "gets": ..., "errors": ..., "lost": ..., "corrupt": ..., ...}
 
+Constant-rate / soak mode
+  --rate OPS paces the client at a constant OPS operations per second in total (open loop: each
+  thread follows a fixed schedule and never bursts to catch up). --pr/--pw send the read/write
+  quorums with every request. --bucket may list several buckets (comma separated); operations
+  rotate over them, and --bucket-type is one type for all of them or one type per bucket. --keyspace N bounds the keys each thread keeps per bucket, so a long run
+  overwrites instead of growing client memory. --window S prints one `WINDOW {json}` line to
+  stderr every S seconds with that interval's rate, errors and latency percentiles.
+
 Usage
   riak_stress.py --host HOST --user USER --cert tls.crt --key tls.key --cacert ca.crt \
-      --bucket-type TYPE --bucket BUCKET [--threads 16] [--duration 60] [--value-size 1024] \
-      [--read-ratio 0.7] [--port 8087] [--key-prefix c0-]
+      --bucket-type TYPE[,TYPE...] --bucket BUCKET[,BUCKET...] [--threads 16] [--duration 60] \
+      [--value-size 1024] [--read-ratio 0.7] [--port 8087] [--key-prefix c0-] \
+      [--rate 0] [--pr N] [--pw N] [--keyspace 0] [--window 0]
 Exit status: 0 when there were no errors, lost or corrupt values; 2 otherwise.
 """
 import argparse
@@ -72,6 +81,11 @@ def _bool_field(num, value):
     return _varint(num << 3) + _varint(1 if value else 0)
 
 
+def _uint_field(num, value):
+    """One unsigned varint (wire type 0) field."""
+    return _varint(num << 3) + _varint(value)
+
+
 def _read_varint(data, i):
     shift = result = 0
     while True:
@@ -106,18 +120,24 @@ def _parse_fields(data):
             raise ValueError("unsupported wire type %d" % wire)
 
 
-def put_req(btype, bucket, key, value, vclock):
-    # RpbPutReq: bucket=1 key=2 vclock=3 content=4 return_head=11 type=16.
+def put_req(btype, bucket, key, value, vclock, pw=None):
+    # RpbPutReq: bucket=1 key=2 vclock=3 content=4 pw=8 return_head=11 type=16.
     content = _field(1, value) + _field(2, b"application/octet-stream")  # RpbContent
     msg = _field(1, bucket) + _field(2, key)
     if vclock:
         msg += _field(3, vclock)
-    return msg + _field(4, content) + _bool_field(11, True) + _field(16, btype)
+    msg += _field(4, content)
+    if pw:
+        msg += _uint_field(8, pw)
+    return msg + _bool_field(11, True) + _field(16, btype)
 
 
-def get_req(btype, bucket, key):
-    # RpbGetReq: bucket=1 key=2 type=13.
-    return _field(1, bucket) + _field(2, key) + _field(13, btype)
+def get_req(btype, bucket, key, pr=None):
+    # RpbGetReq: bucket=1 key=2 pr=4 type=13.
+    msg = _field(1, bucket) + _field(2, key)
+    if pr:
+        msg += _uint_field(4, pr)
+    return msg + _field(13, btype)
 
 
 def parse_get(body):
@@ -234,11 +254,14 @@ class Stats:
     def __init__(self):
         self.puts = self.gets = self.errors = self.lost = self.corrupt = self.siblings = 0
         self.put_ms, self.get_ms = [], []
+        self.win_put, self.win_get = [], []   # latencies since the last WINDOW line
+        self.win_errors = self.late = 0
         self.error_kinds = {}
         self.verified = self.final_lost = self.final_corrupt = 0
 
     def error(self, exc):
         self.errors += 1
+        self.win_errors += 1
         kind = type(exc).__name__ + ": " + str(exc)[:80]
         self.error_kinds[kind] = self.error_kinds.get(kind, 0) + 1
 
@@ -253,29 +276,65 @@ def sample(lst, value):
         lst[random.randrange(MAX_SAMPLES)] = value
 
 
+class BucketState:
+    """What one thread has written to one bucket: the latest version and vclock per key."""
+
+    def __init__(self):
+        self.versions = {}   # n -> latest version written
+        self.vclocks = {}    # n -> vclock of the latest write
+        self.next_key = 0
+
+
 def worker(args, tid, deadline, stats, ready):
-    key_bytes = lambda n: ("%st%d-%d" % (args.key_prefix, tid, n)).encode()
-    btype, bucket = args.bucket_type.encode(), args.bucket.encode()
+    buckets = [b.encode() for b in args.bucket.split(",")]
+    key_bytes = lambda bi, n: ("%st%d-b%d-%d" % (args.key_prefix, tid, bi, n)).encode() \
+        if len(buckets) > 1 else ("%st%d-%d" % (args.key_prefix, tid, n)).encode()
+    # The value only depends on (thread, key, version); fold the bucket into the "thread" part so
+    # the same key number in two buckets does not share values.
+    value_id = lambda bi, n: (tid * 1000 + bi, n)
+    # One bucket type for all buckets, or one per bucket (same order as --bucket).
+    types = [t.encode() for t in args.bucket_type.split(",")]
+    if len(types) not in (1, len(buckets)):
+        raise SystemExit("--bucket-type needs 1 entry or one per --bucket entry")
+    btypes = types * len(buckets) if len(types) == 1 else types
     rnd = random.Random(args.seed * 1000 + tid)
-    versions = {}   # n -> latest version written
-    vclocks = {}    # n -> vclock of the latest write
+    states = [BucketState() for _ in buckets]
     conn = Connection(args)
-    next_key = 0
+    interval = (args.threads / args.rate) if args.rate > 0 else 0.0
     ready.wait()
+    due = time.time()
+    count = 0
     while time.time() < deadline:
+        if interval:
+            # Open-loop pacing: one fixed schedule per thread. Never burst to catch up; after a
+            # stall longer than a second, resynchronise and count the missed slots as late.
+            due += interval
+            delay = due - time.time()
+            if delay > 0:
+                time.sleep(delay)
+            elif delay < -1.0:
+                stats.late += int(-delay / interval)
+                due = time.time()
+        bi = count % len(buckets)
+        count += 1
+        st = states[bi]
+        bucket = buckets[bi]
         try:
             if conn.sock is None:
                 conn.open()
-            if versions and rnd.random() < args.read_ratio:
-                n = rnd.choice(list(versions)) if len(versions) < 64 else rnd.randrange(next_key)
-                if n not in versions:
+            if st.versions and rnd.random() < args.read_ratio:
+                n = rnd.choice(list(st.versions)) if len(st.versions) < 64 else rnd.randrange(st.next_key)
+                if n not in st.versions:
                     continue
                 t0 = time.time()
-                body = conn.call(MSG_GET_REQ, get_req(btype, bucket, key_bytes(n)), MSG_GET_RESP)
-                sample(stats.get_ms, (time.time() - t0) * 1000)
+                body = conn.call(MSG_GET_REQ, get_req(btypes[bi], bucket, key_bytes(bi, n), args.pr), MSG_GET_RESP)
+                ms = (time.time() - t0) * 1000
+                sample(stats.get_ms, ms)
+                stats.win_get.append(ms)
                 stats.gets += 1
                 values, _ = parse_get(body)
-                want = make_value(args.key_prefix, tid, n, versions[n], args.value_size)
+                vt, vn = value_id(bi, n)
+                want = make_value(args.key_prefix, vt, vn, st.versions[n], args.value_size)
                 if not values:
                     stats.lost += 1
                 else:
@@ -284,40 +343,71 @@ def worker(args, tid, deadline, stats, ready):
                     if want not in values:
                         stats.corrupt += 1
             else:
-                # Overwrite an existing key a third of the time, otherwise write a new one.
-                if versions and rnd.random() < 0.33:
-                    n = rnd.randrange(next_key)
+                # Overwrite an existing key a third of the time, otherwise write a new one; once
+                # the keyspace is full every write overwrites.
+                full = args.keyspace > 0 and st.next_key >= args.keyspace
+                if st.versions and (full or rnd.random() < 0.33):
+                    n = rnd.randrange(st.next_key)
                 else:
-                    n, next_key = next_key, next_key + 1
-                version = versions.get(n, 0) + 1
-                value = make_value(args.key_prefix, tid, n, version, args.value_size)
+                    n, st.next_key = st.next_key, st.next_key + 1
+                version = st.versions.get(n, 0) + 1
+                vt, vn = value_id(bi, n)
+                value = make_value(args.key_prefix, vt, vn, version, args.value_size)
                 t0 = time.time()
-                body = conn.call(MSG_PUT_REQ, put_req(btype, bucket, key_bytes(n), value, vclocks.get(n)),
-                                 MSG_PUT_RESP)
-                sample(stats.put_ms, (time.time() - t0) * 1000)
+                body = conn.call(MSG_PUT_REQ, put_req(btypes[bi], bucket, key_bytes(bi, n), value,
+                                                       st.vclocks.get(n), args.pw), MSG_PUT_RESP)
+                ms = (time.time() - t0) * 1000
+                sample(stats.put_ms, ms)
+                stats.win_put.append(ms)
                 stats.puts += 1
-                versions[n] = version
-                vclocks[n] = parse_put_vclock(body)
+                st.versions[n] = version
+                st.vclocks[n] = parse_put_vclock(body)
         except (OSError, EOFError, RiakError, ssl.SSLError) as exc:
             stats.error(exc)
             conn.close()
             time.sleep(0.2)  # brief backoff before reconnecting
     # Final verification: read back every key this thread wrote.
-    for n, version in versions.items():
-        try:
-            if conn.sock is None:
-                conn.open()
-            body = conn.call(MSG_GET_REQ, get_req(btype, bucket, key_bytes(n)), MSG_GET_RESP)
-            values, _ = parse_get(body)
-            stats.verified += 1
-            if not values:
-                stats.final_lost += 1
-            elif make_value(args.key_prefix, tid, n, version, args.value_size) not in values:
-                stats.final_corrupt += 1
-        except (OSError, EOFError, RiakError, ssl.SSLError) as exc:
-            stats.error(exc)
-            conn.close()
+    for bi, st in enumerate(states):
+        for n, version in st.versions.items():
+            try:
+                if conn.sock is None:
+                    conn.open()
+                body = conn.call(MSG_GET_REQ, get_req(btypes[bi], buckets[bi], key_bytes(bi, n), args.pr), MSG_GET_RESP)
+                values, _ = parse_get(body)
+                stats.verified += 1
+                vt, vn = value_id(bi, n)
+                if not values:
+                    stats.final_lost += 1
+                elif make_value(args.key_prefix, vt, vn, version, args.value_size) not in values:
+                    stats.final_corrupt += 1
+            except (OSError, EOFError, RiakError, ssl.SSLError) as exc:
+                stats.error(exc)
+                conn.close()
     conn.close()
+
+
+def window_record(all_stats, seconds):
+    """The WINDOW record for the interval just ended; resets the per-interval counters.
+
+    Threads keep appending while this swaps their lists, so a sample may land in the previous
+    window: harmless for rates and percentiles over a minute-long interval."""
+    put_ms, get_ms, errors, late = [], [], 0, 0
+    for st in all_stats:
+        p, st.win_put = st.win_put, []
+        g, st.win_get = st.win_get, []
+        put_ms += p
+        get_ms += g
+        errors += st.win_errors
+        st.win_errors = 0
+        late += st.late
+        st.late = 0
+    ops = len(put_ms) + len(get_ms)
+    return {
+        "t": int(time.time()), "seconds": round(seconds, 1), "ops": ops,
+        "puts": len(put_ms), "gets": len(get_ms),
+        "ops_per_s": round(ops / max(seconds, 1e-9), 1), "errors": errors, "late": late,
+        "put": percentiles(put_ms), "get": percentiles(get_ms),
+    }
 
 
 def percentiles(samples):
@@ -345,7 +435,19 @@ def main(argv):
     p.add_argument("--key-prefix", default="", help="distinguishes parallel clients, e.g. c0-")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--timeout", type=float, default=30, help="socket timeout in seconds")
+    p.add_argument("--rate", type=float, default=0,
+                   help="constant total operations per second for this client (0 = as fast as possible)")
+    p.add_argument("--pr", type=int, default=0, help="primary read quorum sent with every GET (0 = bucket default)")
+    p.add_argument("--pw", type=int, default=0, help="primary write quorum sent with every PUT (0 = bucket default)")
+    p.add_argument("--keyspace", type=int, default=0,
+                   help="keys each thread keeps per bucket; once full, writes overwrite (0 = unbounded)")
+    p.add_argument("--window", type=float, default=0,
+                   help="print a WINDOW json line to stderr every this many seconds (0 = off)")
     args = p.parse_args(argv)
+    n_buckets, n_types = len(args.bucket.split(",")), len(args.bucket_type.split(","))
+    if n_types not in (1, n_buckets):
+        p.error("--bucket-type needs 1 entry or one per --bucket entry (got %d types for %d buckets)"
+                % (n_types, n_buckets))
 
     deadline = time.time() + args.duration + 1  # +1: let all threads connect first
     ready = threading.Event()
@@ -357,12 +459,19 @@ def main(argv):
     started = time.time()
     ready.set()
     next_report = started + 10
+    next_window = started + args.window if args.window > 0 else None
+    last_window = started
     while any(t.is_alive() for t in threads):
         time.sleep(0.5)
-        if time.time() >= next_report:
+        now = time.time()
+        if next_window is not None and now >= next_window:
+            sys.stderr.write("WINDOW " + json.dumps(window_record(all_stats, now - last_window), sort_keys=True) + "\n")
+            sys.stderr.flush()
+            last_window, next_window = now, next_window + args.window
+        elif next_window is None and now >= next_report:
             done = sum(s.puts + s.gets for s in all_stats)
             sys.stderr.write("PROGRESS %.0fs ops=%d (%.0f/s) errors=%d\n" % (
-                time.time() - started, done, done / max(time.time() - started, 1e-9),
+                now - started, done, done / max(now - started, 1e-9),
                 sum(s.errors for s in all_stats)))
             sys.stderr.flush()
             next_report += 10
@@ -386,6 +495,7 @@ def main(argv):
         "duration_s": round(elapsed, 2),
         "ops_per_s": round((puts + gets) / elapsed, 1),
         "threads": args.threads, "value_size": args.value_size, "read_ratio": args.read_ratio,
+        "target_rate": args.rate, "late": sum(s.late for s in all_stats),
         "latency_ms": {
             "put": percentiles([x for s in all_stats for x in s.put_ms]),
             "get": percentiles([x for s in all_stats for x in s.get_ms]),
