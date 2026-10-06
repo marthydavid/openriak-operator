@@ -1,9 +1,24 @@
 # openriak-operator Helm chart
 
-Installs the [OpenRiak operator](https://github.com/marthydavid/openriak-operator), which
-manages `RiakCluster`, `RiakBucket` and `RiakUser` resources. RiakUsers authenticate with
-mTLS client certificates issued by [cert-manager](https://cert-manager.io), which must be
-installed for TLS-enabled clusters and users.
+Installs the [OpenRiak operator](https://github.com/marthydavid/openriak-operator), which manages
+`RiakCluster`, `RiakBucket` and `RiakUser` resources: Riak KV clusters on Kubernetes with
+cert-manager-issued TLS and mTLS client-certificate users.
+
+| | |
+|---|---|
+| Chart version | see `Chart.yaml` `version` |
+| Operator image | `ghcr.io/marthydavid/openriak-operator`, tag defaults to `appVersion` |
+| Default Riak image | `ghcr.io/marthydavid/riak:3.2.6` (3.0, 3.2 and 3.4 are published) |
+
+## Prerequisites
+
+- Kubernetes 1.34 or later. Built and verified against the 1.35 client libraries; runs on OpenShift/OKD
+  4.21 and 4.22 (default `restricted-v2` SCC, no custom SCC needed) and on AKS.
+- [cert-manager](https://cert-manager.io/docs/installation/) for TLS-enabled clusters and for `RiakUser`
+  client certificates.
+- A `StorageClass` for durable clusters (or use ephemeral storage for tests).
+- Optional: Prometheus Operator CRDs for the `ServiceMonitor` / `PodMonitor` resources, and Grafana with its
+  dashboard sidecar for the bundled dashboard.
 
 ## Install
 
@@ -21,37 +36,108 @@ helm install openriak-operator charts/openriak-operator \
   --namespace openriak-system --create-namespace
 ```
 
-CRDs ship in the chart's `crds/` directory: Helm installs them on first install but never
-upgrades or deletes them. Apply `config/crd/bases/` manually when upgrading across CRD
-changes, and note `helm uninstall` leaves the CRDs (and all Riak custom resources) in place.
+Verify:
+
+```bash
+kubectl -n openriak-system get pods -l control-plane=controller-manager
+kubectl get crd | grep riak.openriak.io
+```
+
+Then create a cluster, for example
+`kubectl apply -f https://raw.githubusercontent.com/marthydavid/openriak-operator/main/examples/0-local-dev-cluster.yaml`.
+
+## Upgrade
+
+```bash
+helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator \
+  --namespace openriak-system
+```
+
+**CRDs are not upgraded by Helm.** The `crds/` directory is applied on first install only. When a release
+changes a CRD, apply the new schemas yourself with server-side apply (they are large):
+
+```bash
+for crd in riakclusters riakusers riakbuckets; do
+  kubectl apply --server-side -f \
+    https://raw.githubusercontent.com/marthydavid/openriak-operator/main/config/crd/bases/riak.openriak.io_$crd.yaml
+done
+```
+
+Check the [release notes](https://github.com/marthydavid/openriak-operator/blob/main/docs/release-notes.md)
+before upgrading: some releases restart existing RiakClusters once (one pod at a time).
+
+## Uninstall
+
+```bash
+helm uninstall openriak-operator --namespace openriak-system
+```
+
+This leaves the CRDs and every RiakCluster, RiakBucket and RiakUser (and their data volumes) in place.
+Delete the Riak resources first if you want them gone, then remove the CRDs by hand
+(`kubectl delete crd riakclusters.riak.openriak.io riakusers.riak.openriak.io riakbuckets.riak.openriak.io`).
 
 ## Values
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `image.repository` | `ghcr.io/marthydavid/openriak-operator` | Operator image |
-| `image.tag` | chart `appVersion` | Operator image tag |
-| `image.pullPolicy` | `IfNotPresent` | Pull policy |
-| `riak.image` | `ghcr.io/marthydavid/riak:3.2.6` | Default operand image (`--riak-image`) used when a RiakCluster omits `spec.image` |
-| `replicaCount` | `1` | Manager replicas (leader election handles >1) |
+| `image.tag` | `""` (chart `appVersion`) | Operator image tag; pin a digest-resolved tag if you need to |
+| `image.pullPolicy` | `IfNotPresent` | Image pull policy |
+| `imagePullSecrets` | `[]` | Pull secrets for the operator image |
+| `nameOverride`, `fullnameOverride` | `""` | Override resource names |
+| `riak.image` | `ghcr.io/marthydavid/riak:3.2.6` | Default operand image (`--riak-image`), used when a RiakCluster omits `spec.image` |
+| `maxConcurrentReconciles` | `1` | Parallel reconciles per controller (`--max-concurrent-reconciles`). Raise it to provision many clusters, users or buckets faster, at the cost of more parallel `kubectl exec` load on Riak nodes; measure first ([scaling guide](https://github.com/marthydavid/openriak-operator/blob/main/docs/scaling.md)) |
+| `replicaCount` | `1` | Manager replicas; with more than one, leader election must stay enabled |
 | `leaderElection.enabled` | `true` | Enable leader election |
-| `metrics.enabled` | `true` | Serve authenticated metrics on `:8443` with Service + token-review RBAC |
-| `metrics.serviceMonitor.enabled` | `false` | Create a ServiceMonitor (requires Prometheus Operator CRDs) |
-| `dashboard.enabled` | `false` | Ship the Riak KV Grafana dashboard as a ConfigMap (namespace/cluster/pod selectors) for Grafana's dashboard sidecar |
-| `dashboard.namespace` | release namespace | Namespace for that ConfigMap (set it to Grafana's namespace if the sidecar only watches one) |
+| `metrics.enabled` | `true` | Serve authenticated metrics on `:8443`, with a Service and token-review RBAC |
+| `metrics.serviceMonitor.enabled` | `false` | Create a `ServiceMonitor` for the operator (needs Prometheus Operator CRDs) |
+| `metrics.serviceMonitor.tlsConfig` | `insecureSkipVerify: true` | Scrape TLS settings. The manager serves a self-signed certificate, so verification is skipped by default; set `insecureSkipVerify: false` explicitly and add `caFile`/`serverName` if you issue a real certificate |
+| `dashboard.enabled` | `false` | Ship the Riak KV Grafana dashboard as a ConfigMap for Grafana's dashboard sidecar |
+| `dashboard.namespace` | release namespace | Namespace of the dashboard ConfigMap; set to Grafana's namespace if the sidecar watches only one |
 | `dashboard.labels` | `grafana_dashboard: "1"` | Labels the sidecar selects on |
-| `dashboard.annotations` | `{}` | Extra annotations, e.g. `grafana_folder` |
+| `dashboard.annotations` | `{}` | Extra annotations, e.g. `grafana_folder: OpenRiak` |
 | `serviceAccount.create` | `true` | Create the ServiceAccount |
 | `serviceAccount.name` | release fullname | ServiceAccount name |
-| `rbac.create` | `true` | Create ClusterRole/Role and bindings |
-| `resources` | see `values.yaml` | Manager resources |
-| `imagePullSecrets`, `podAnnotations`, `nodeSelector`, `tolerations`, `affinity` | — | Standard passthroughs |
+| `serviceAccount.annotations` | `{}` | ServiceAccount annotations |
+| `rbac.create` | `true` | Create the ClusterRole/Role and bindings |
+| `podAnnotations` | `{}` | Extra pod annotations |
+| `resources` | limits `500m` / `512Mi`, requests `10m` / `128Mi` | Manager resources. The operator caches what it watches and peaks after a restart; keep the memory limit comfortably above steady state |
+| `nodeSelector`, `tolerations`, `affinity` | empty | Standard scheduling passthroughs |
 
-## Example
+The pod runs as non-root with a read-only root filesystem, all capabilities dropped and the
+`RuntimeDefault` seccomp profile.
+
+## Examples
+
+Use a different default Riak image and scrape the operator with Prometheus:
 
 ```bash
 helm install openriak-operator charts/openriak-operator \
   --namespace openriak-system --create-namespace \
-  --set riak.image=ghcr.io/marthydavid/riak:3.2.6 \
+  --set riak.image=ghcr.io/marthydavid/riak:3.4.0 \
   --set metrics.serviceMonitor.enabled=true
 ```
+
+Ship the Grafana dashboard into Grafana's namespace:
+
+```bash
+helm upgrade --install openriak-operator charts/openriak-operator \
+  --namespace openriak-system \
+  --set dashboard.enabled=true \
+  --set dashboard.namespace=monitoring \
+  --set-string dashboard.annotations.grafana_folder=OpenRiak
+```
+
+Provision many resources faster:
+
+```bash
+helm upgrade --install openriak-operator charts/openriak-operator \
+  --namespace openriak-system --set maxConcurrentReconciles=4
+```
+
+## More
+
+- [Getting started on Kubernetes](https://github.com/marthydavid/openriak-operator/blob/main/docs/getting-started/kubernetes.md)
+  and [on OpenShift](https://github.com/marthydavid/openriak-operator/blob/main/docs/getting-started/openshift.md)
+- [Documentation](https://github.com/marthydavid/openriak-operator/tree/main/docs) and
+  [release notes](https://github.com/marthydavid/openriak-operator/blob/main/docs/release-notes.md)
