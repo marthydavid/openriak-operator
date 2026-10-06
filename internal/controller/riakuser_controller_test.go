@@ -75,7 +75,7 @@ var _ = Describe("RiakUser Controller", func() {
 						ClusterName: "nonexistent-cluster",
 						Username:    "alice",
 						CertificateRef: &riakv1.UserCertificateRef{
-							IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+							IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 						},
 					},
 				})).To(Succeed())
@@ -121,7 +121,7 @@ var _ = Describe("RiakUser Controller", func() {
 						ClusterName: clusterRefName,
 						Username:    "bob",
 						CertificateRef: &riakv1.UserCertificateRef{
-							IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+							IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 						},
 					},
 				})).To(Succeed())
@@ -216,7 +216,7 @@ var _ = Describe("RiakUser Controller", func() {
 					ClusterName: clusterRefName,
 					Username:    "grace",
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 					Grants: []riakv1.Grant{
 						{Resource: "any", Permission: "read"},
@@ -244,7 +244,7 @@ var _ = Describe("RiakUser Controller", func() {
 					ClusterName: clusterRefName,
 					Username:    "heidi",
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 					Grants: []riakv1.Grant{
 						{Resource: "bucket", Permission: "write", BucketName: "e2e"},
@@ -289,7 +289,7 @@ var _ = Describe("RiakUser Controller", func() {
 					ClusterName: "some-cluster",
 					Username:    "eve",
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 				},
 			})).To(Succeed())
@@ -323,7 +323,7 @@ var _ = Describe("RiakUser Controller", func() {
 					ClusterName: cluster,
 					Username:    name + "_riak",
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 				},
 			})).To(Succeed())
@@ -463,7 +463,7 @@ var _ = Describe("RiakUser Controller", func() {
 					ClusterName: "missing-cluster",
 					Username:    "alice",
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 				},
 			}
@@ -485,7 +485,7 @@ var _ = Describe("RiakUser Controller", func() {
 					ClusterName: clusterName,
 					Username:    "dave",
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 				},
 			}
@@ -566,7 +566,7 @@ var _ = Describe("RiakUser Controller", func() {
 					ClusterName: clusterRefName,
 					Username:    username,
 					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
+						IssuerRef: &riakv1.CertIssuerRef{Name: "test-issuer", Kind: "Issuer"},
 					},
 				},
 			})).To(Succeed())

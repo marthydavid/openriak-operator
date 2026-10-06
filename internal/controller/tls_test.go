@@ -78,7 +78,7 @@ var _ = Describe("TLS certificate builders", func() {
 	Context("buildUserCertificate", func() {
 		It("sets commonName to the Riak username and correct secret name", func() {
 			certRef := &riakv1.UserCertificateRef{
-				IssuerRef: riakv1.CertIssuerRef{Name: "ca-issuer", Kind: "Issuer"},
+				IssuerRef: &riakv1.CertIssuerRef{Name: "ca-issuer", Kind: "Issuer"},
 			}
 			cert := buildUserCertificate("my-riak-user", "default", "riakuser1", certRef)
 
@@ -92,7 +92,7 @@ var _ = Describe("TLS certificate builders", func() {
 
 		It("uses explicit SecretName when provided", func() {
 			certRef := &riakv1.UserCertificateRef{
-				IssuerRef:  riakv1.CertIssuerRef{Name: "issuer"},
+				IssuerRef:  &riakv1.CertIssuerRef{Name: "issuer"},
 				SecretName: "custom-secret",
 			}
 			cert := buildUserCertificate("u", "ns", "alice", certRef)
@@ -102,7 +102,7 @@ var _ = Describe("TLS certificate builders", func() {
 
 		It("defaults IssuerKind to Issuer when not set", func() {
 			certRef := &riakv1.UserCertificateRef{
-				IssuerRef: riakv1.CertIssuerRef{Name: "issuer"},
+				IssuerRef: &riakv1.CertIssuerRef{Name: "issuer"},
 			}
 			cert := buildUserCertificate("u", "ns", "alice", certRef)
 			spec := unstructuredNestedMap(cert.Object, "spec")

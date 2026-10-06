@@ -222,13 +222,14 @@ ln -sf $(1)-$(3) $(1)
 endef
 
 .PHONY: scale-test
-scale-test: ## Run the operator load-test harness against the current kubeconfig (see test/scale). Vars: CLUSTERS, USERS, BUCKETS, MONITORING=true, SCRAPE_KIND.
+scale-test: ## Run the operator load-test harness against the current kubeconfig (see test/scale). Vars: CLUSTERS, USERS, BUCKETS, MONITORING=true, SCRAPE_KIND, EXTERNAL_USERS.
 	go run ./test/scale \
 		-clusters $(or $(CLUSTERS),3) \
 		-users $(or $(USERS),5) \
 		-buckets $(or $(BUCKETS),5) \
 		-monitoring=$(or $(MONITORING),false) \
-		-scrape-kind=$(SCRAPE_KIND)
+		-scrape-kind=$(SCRAPE_KIND) \
+		-external-users=$(or $(EXTERNAL_USERS),0)
 
 .PHONY: sync-dashboard
 sync-dashboard: ## Copy the Grafana dashboard example into the Helm chart (CI fails when they differ).

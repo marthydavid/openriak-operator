@@ -121,6 +121,7 @@ success prints `MATCH: Riak holds exactly what the CRs declare`.
 | `-verify-workers` | parallel `kubectl exec` calls while verifying (default 6) |
 | `-verify-timeout` | how long verification retries before reporting mismatches |
 | `-monitoring` | enable `spec.monitoring` on every cluster and verify the Riak metrics (see below) |
+| `-external-users` | of `-users` per cluster, how many use a certificate from an external CA instead of cert-manager (see below) |
 | `-scrape-kind` | with `-monitoring`: `PodMonitor`, `ServiceMonitor` or `None` (default: the operator's) |
 | `-stress` | also stress-test Riak with the example application over mTLS (see [Stress-testing Riak](#stress-testing-riak)) |
 | `-stress-duration` | timed load per client (default `1m`) |
@@ -133,6 +134,34 @@ success prints `MATCH: Riak holds exactly what the CRs declare`.
 ```bash
 go run ./test/scale -clusters 3 -users 20 -buckets 20 -replicas 3 \
   -storage-class lvms-vg1 -mutate -delete-users-every 4 -timeout 30m
+```
+
+### Both certificate patterns
+
+`-external-users N` makes the last N of each cluster's `-users` authenticate with a certificate
+from an **external CA** (`certificateRef.externalSecretName`) while the others keep using
+cert-manager (`issuerRef`), so both patterns share every cluster. The harness plays the external
+PKI: it creates its own CA, publishes only the CA certificate in the Secret `scale-ext-ca`, which
+every cluster trusts through `spec.tls.additionalClientCAs`, and issues each external user's
+certificate itself. Cluster TLS is switched on (server certificates come from the scale CA Issuer).
+
+After convergence it verifies, on every cluster and **every node**:
+
+- every RiakUser reports `certificateReady`, no cluster reports a `trustBundleError`, and the
+  cluster trusts the expected number of CAs (cluster CA, plus the external CA when used);
+- a cert-manager user has a `Certificate`, an external-CA user has none;
+- the node's real `ca.crt` (read from the pod, the file Riak uses as `ssl.cacertfile`) holds those
+  CAs, and **each user's certificate, of both kinds, verifies against it** with CN equal to the
+  username and client-auth usage.
+
+It retries for `-verify-timeout` (cert-manager issues asynchronously and the kubelet refreshes the
+mounted bundle on its own schedule) and prints `CERTS OK` or `CERTS:` lines. The same check runs
+with `-stress` (cert-manager users only) and with `-verify-only`; pass the same `-external-users`
+to `-verify-only` so it knows what to expect.
+
+```bash
+make scale-test CLUSTERS=3 USERS=6 EXTERNAL_USERS=3
+go run ./test/scale -clusters 3 -users 10 -external-users 4 -replicas 3 -storage-class lvms-vg1
 ```
 
 ### Stress-testing Riak

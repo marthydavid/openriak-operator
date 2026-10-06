@@ -58,6 +58,9 @@ type RiakClusterReconciler struct {
 	Scheme       *runtime.Scheme
 	DefaultImage string         // fallback image when spec.image is empty; defaults to defaultRiakImage
 	Executor     *riak.Executor // if nil, a real executor is created per reconcile
+	// APIReader reads Secrets and ConfigMaps uncached (a cached Get would start an
+	// informer over every Secret in the cluster); nil falls back to Client.
+	APIReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakclusters,verbs=get;list;watch;create;update;patch;delete
@@ -69,6 +72,7 @@ type RiakClusterReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;create;update
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
@@ -114,6 +118,14 @@ func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			log.Error(updateErr, "failed to update cluster status")
 		}
 		return ctrl.Result{}, err
+	}
+
+	// Merge the cluster CA with spec.tls.additionalClientCAs into the trust Secret
+	// Riak mounts as ca.crt. A bad entry is reported in status.tlsStatus
+	// (trustBundleError) rather than failing the whole reconcile: the running pods
+	// keep their current bundle.
+	if err := r.reconcileTrustBundle(ctx, cluster); err != nil {
+		log.Error(err, "failed to reconcile the client CA trust bundle")
 	}
 
 	// Reconcile the metrics exporter ConfigMap before the StatefulSet so the
@@ -272,16 +284,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 			// disable it. check_crl is a hidden riak_api key.
 			corev1.EnvVar{Name: "RIAK_CONFIG_CHECK_CRL", Value: "off"},
 		)
-		extraVolumes = []corev1.Volume{
-			{
-				Name: riakTLSVolumeName,
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName: clusterTLSSecretName(cluster.Name),
-					},
-				},
-			},
-		}
+		extraVolumes = []corev1.Volume{tlsVolume(cluster)}
 		extraVolumeMounts = []corev1.VolumeMount{
 			{
 				Name:      riakTLSVolumeName,
@@ -759,6 +762,7 @@ func (r *RiakClusterReconciler) tlsStatus(ctx context.Context, cluster *riakv1.R
 	ready, reason := fetchCertificateReadiness(ctx, r.Client, clusterCertName(cluster.Name), cluster.Namespace)
 	status.CertManagerReady = ready
 	status.CertManagerError = reason
+	status.TrustedClientCAs, status.TrustBundleError = r.trustStatus(ctx, cluster)
 	status.InterNodeReady = ready && allNodesReady
 	status.ClientReady = status.InterNodeReady
 	return status

@@ -66,6 +66,11 @@ type opts struct {
 	monitoring bool
 	scrapeKind string
 
+	// externalUsers is how many of each cluster's users get a certificate from an
+	// external CA instead of cert-manager (see certs.go).
+	externalUsers int
+	extCA         *extCA
+
 	verify      bool
 	verifyOnly  bool
 	mutate      bool
@@ -103,6 +108,9 @@ func main() {
 		"enable spec.monitoring (json_exporter sidecar) on every cluster and verify the riak_* metrics on every node")
 	flag.StringVar(&o.scrapeKind, "scrape-kind", "",
 		"with -monitoring: spec.monitoring.scrapeKind (PodMonitor, ServiceMonitor, None); default is the operator's")
+	flag.IntVar(&o.externalUsers, "external-users", 0,
+		"of -users per cluster, how many authenticate with a certificate from an external CA (the harness plays the CA) "+
+			"instead of cert-manager; turns on cluster TLS and verifies both certificate patterns")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
 	flag.BoolVar(&o.stress, "stress", false,
@@ -147,6 +155,9 @@ const minRingSize = 128
 func validateOpts(o opts) error {
 	if o.ringSize < minRingSize || o.ringSize&(o.ringSize-1) != 0 {
 		return fmt.Errorf("-ring-size %d: must be a power of two >= %d", o.ringSize, minRingSize)
+	}
+	if o.externalUsers < 0 || o.externalUsers > o.users {
+		return fmt.Errorf("-external-users %d: must be between 0 and -users (%d)", o.externalUsers, o.users)
 	}
 	if o.stress && (o.stressReadRatio < 0 || o.stressReadRatio > 1 || o.stressThreads < 1 ||
 		o.stressClients < 1 || o.stressDuration < 5*time.Second) {
@@ -200,9 +211,18 @@ func run(o opts) error {
 	// Users authenticate by client certificate, so they need a cert-manager
 	// Issuer; only require it (and cert-manager) when creating users.
 	if o.users > 0 || o.stress {
-		if err := ensureIssuer(ctx, c, o.namespace, o.stress); err != nil {
+		// Cluster TLS (stress clients, external-CA users) needs an Issuer whose
+		// Secrets carry the CA, so the server certificate's ca.crt is populated.
+		if err := ensureIssuer(ctx, c, o.namespace, o.certsEnabled()); err != nil {
 			return err
 		}
+	}
+	if o.externalUsers > 0 {
+		ca, err := setupExternalCA(ctx, c, o)
+		if err != nil {
+			return err
+		}
+		o.extCA = ca
 	}
 
 	start := time.Now()
@@ -228,6 +248,11 @@ func run(o opts) error {
 func runVerifyOnly(ctx context.Context, c client.Client, o opts) error {
 	if err := verifyEventually(ctx, c, o, "existing state"); err != nil {
 		return err
+	}
+	if o.certsEnabled() {
+		if err := verifyCertsEventually(ctx, c, o); err != nil {
+			return err
+		}
 	}
 	if o.monitoring {
 		if err := verifyMetricsEventually(ctx, c, o); err != nil {
@@ -258,6 +283,11 @@ func verifyHealth(ctx context.Context, c client.Client, o opts) error {
 func runStages(ctx context.Context, c client.Client, o opts) error {
 	if err := verifyEventually(ctx, c, o, "after convergence"); err != nil {
 		return err
+	}
+	if o.certsEnabled() {
+		if err := verifyCertsEventually(ctx, c, o); err != nil {
+			return err
+		}
 	}
 	if o.monitoring {
 		if err := verifyMetricsEventually(ctx, c, o); err != nil {
@@ -463,13 +493,9 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 		if o.monitoring {
 			spec.Monitoring = &riakv1.MonitoringConfig{Enabled: true, ScrapeKind: o.scrapeKind}
 		}
-		if o.stress {
-			// The stress clients authenticate over TLS with client certificates.
-			spec.TLS = &riakv1.TLSConfig{
-				Enabled:     true,
-				CertManager: &riakv1.CertManagerConfig{IssuerName: "scale-issuer", IssuerKind: "Issuer"},
-			}
-		}
+		// TLS for the stress clients and the external-CA users, which both
+		// authenticate over TLS with client certificates.
+		spec.TLS = o.clusterTLS()
 		if o.ephemeral {
 			spec.EphemeralStorage = true
 		} else {
@@ -486,13 +512,16 @@ func createAll(ctx context.Context, c client.Client, o opts) error {
 			user := &riakv1.RiakUser{
 				ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-u%03d", cl, u), Namespace: o.namespace},
 				Spec: riakv1.RiakUserSpec{
-					ClusterName: cl,
-					Username:    fmt.Sprintf("%s_u%03d", cl, u),
-					CertificateRef: &riakv1.UserCertificateRef{
-						IssuerRef: riakv1.CertIssuerRef{Name: "scale-issuer", Kind: "Issuer"},
-					},
-					Grants: randomGrants(rng, cl, o.buckets),
+					ClusterName:    cl,
+					Username:       fmt.Sprintf("%s_u%03d", cl, u),
+					CertificateRef: userCertRef(o, fmt.Sprintf("%s-u%03d", cl, u), u),
+					Grants:         randomGrants(rng, cl, o.buckets),
 				},
+			}
+			if isExternalUser(o, u) {
+				if err := createExternalCert(ctx, c, o, user.Name, user.Spec.Username); err != nil {
+					return err
+				}
 			}
 			if err := c.Create(ctx, user); err != nil && !apiAlreadyExists(err) {
 				return fmt.Errorf("create user: %w", err)

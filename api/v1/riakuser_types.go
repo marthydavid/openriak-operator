@@ -41,16 +41,31 @@ type RiakUserSpec struct {
 	CertificateRef *UserCertificateRef `json:"certificateRef"`
 }
 
-// UserCertificateRef configures cert-manager to issue a client TLS certificate for this user.
-// Riak authenticates the user by client certificate; the issued certificate's CommonName
-// must match spec.username.
+// UserCertificateRef says where the user's client certificate comes from: issued
+// by cert-manager (issuerRef) or already present in a Secret from an external CA
+// (externalSecretName). Riak authenticates the user by client certificate; the
+// certificate's CommonName must match spec.username.
+// +kubebuilder:validation:XValidation:rule="has(self.issuerRef) != has(self.externalSecretName)",message="set exactly one of issuerRef or externalSecretName"
+// +kubebuilder:validation:XValidation:rule="!(has(self.externalSecretName) && has(self.secretName))",message="secretName only applies to issuerRef; an external Secret is named by externalSecretName"
 type UserCertificateRef struct {
 	// IssuerRef references the cert-manager Issuer or ClusterIssuer to sign the certificate.
-	IssuerRef CertIssuerRef `json:"issuerRef"`
+	// +optional
+	IssuerRef *CertIssuerRef `json:"issuerRef,omitempty"`
 
 	// SecretName is the Kubernetes Secret where cert-manager stores the issued certificate.
-	// Defaults to <riakuser-name>-client-tls.
+	// Defaults to <riakuser-name>-client-tls. Only with issuerRef.
 	SecretName string `json:"secretName,omitempty"`
+
+	// ExternalSecretName names an existing Secret (same namespace) holding the
+	// user's certificate, issued by an external CA, in tls.crt (leaf first, then
+	// any intermediates). The operator creates no Certificate; it validates the
+	// Secret (CommonName == spec.username, client-auth usage, not expired, chains
+	// to a CA Riak trusts) and reports the result in status.certificateReady. The
+	// issuing CA must be trusted by the cluster: list it in
+	// RiakCluster spec.tls.additionalClientCAs.
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	ExternalSecretName string `json:"externalSecretName,omitempty"`
 }
 
 // CertIssuerRef identifies a cert-manager Issuer or ClusterIssuer.

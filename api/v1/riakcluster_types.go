@@ -134,6 +134,28 @@ type TLSConfig struct {
 
 	// CertManager enables cert-manager integration.
 	CertManager *CertManagerConfig `json:"certManager,omitempty"`
+
+	// AdditionalClientCAs lists extra certificate authorities Riak trusts for
+	// client certificates, besides the CA of the cluster's own certificate. Use it
+	// for RiakUsers whose certificates come from an external CA (spec.certificateRef.
+	// externalSecretName). The operator merges them with the cluster CA into the
+	// Secret <cluster>-tls-trust, which Riak uses as its ssl.cacertfile.
+	// +optional
+	AdditionalClientCAs []TrustedCASource `json:"additionalClientCAs,omitempty"`
+}
+
+// TrustedCASource references a Secret or ConfigMap key holding one or more PEM
+// CA certificates, in the cluster's namespace. Set exactly one of the two.
+// +kubebuilder:validation:XValidation:rule="has(self.secretRef) != has(self.configMapRef)",message="set exactly one of secretRef or configMapRef"
+type TrustedCASource struct {
+	// SecretRef selects a key of a Secret.
+	// +optional
+	SecretRef *corev1.SecretKeySelector `json:"secretRef,omitempty"`
+
+	// ConfigMapRef selects a key of a ConfigMap (for example one published by
+	// trust-manager).
+	// +optional
+	ConfigMapRef *corev1.ConfigMapKeySelector `json:"configMapRef,omitempty"`
 }
 
 // CertManagerConfig specifies cert-manager configuration.
@@ -218,6 +240,14 @@ type TLSStatus struct {
 	// ClientReady indicates if client TLS is ready. Riak serves client and
 	// inter-node TLS from the same certificate, so the two become ready together.
 	ClientReady bool `json:"clientReady,omitempty"`
+
+	// TrustedClientCAs is the number of distinct CA certificates Riak trusts for
+	// client certificates (the cluster CA plus spec.tls.additionalClientCAs).
+	TrustedClientCAs int32 `json:"trustedClientCAs,omitempty"`
+
+	// TrustBundleError explains why the trust bundle could not be built from
+	// spec.tls.additionalClientCAs (missing Secret/ConfigMap/key, no PEM CA).
+	TrustBundleError string `json:"trustBundleError,omitempty"`
 }
 
 // MonitoringStatus indicates the monitoring configuration status.

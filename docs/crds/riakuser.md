@@ -32,9 +32,10 @@ spec:
 |-------|------|---------|-------------|
 | `clusterName` | string | **required** | `RiakCluster` in the same namespace |
 | `username` | string | **required** | Riak username; also the certificate **CommonName** |
-| `certificateRef.issuerRef.name` | string | **required** | cert-manager issuer |
+| `certificateRef.issuerRef.name` | string | one of `issuerRef` / `externalSecretName` | cert-manager issuer |
 | `certificateRef.issuerRef.kind` | `Issuer` \| `ClusterIssuer` | `Issuer` | Issuer kind |
-| `certificateRef.secretName` | string | `<riakuser-name>-client-tls` | Secret that receives the certificate |
+| `certificateRef.secretName` | string | `<riakuser-name>-client-tls` | Secret that receives the certificate (with `issuerRef` only) |
+| `certificateRef.externalSecretName` | string | — | Existing Secret with the user's certificate from an external CA; no Certificate is created, the Secret is validated. See [External CA](../mtls.md#client-certificates-from-an-external-ca) |
 | `grants[].resource` | `bucket` \| `any` | **required** | What the grant applies to |
 | `grants[].bucketName` | string | — | Bucket, when `resource: bucket` |
 | `grants[].permission` | `read` `write` `delete` `list` `admin` | **required** | Permission |

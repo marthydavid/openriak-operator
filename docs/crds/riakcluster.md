@@ -42,6 +42,7 @@ spec:
 | `tls.enabled` | bool | `false` | Enable TLS (HTTPS + protobuf TLS) using cert-manager |
 | `tls.certManager.issuerName` | string | — | cert-manager Issuer/ClusterIssuer name |
 | `tls.certManager.issuerKind` | string | `Issuer` | `Issuer` or `ClusterIssuer` |
+| `tls.additionalClientCAs[]` | `{secretRef \| configMapRef: {name, key}}` | — | Extra CAs Riak trusts for client certificates (external CA users). See [External CA](../mtls.md#client-certificates-from-an-external-ca) |
 | `monitoring.enabled` | bool | `false` | Add a Prometheus exporter sidecar (and a scrape object, see `scrapeKind`) |
 | `monitoring.exporterImage` | string | operator default | Override the json_exporter image |
 | `monitoring.scrapeKind` | enum | `PodMonitor` | Prometheus Operator object the operator creates: `PodMonitor`, `ServiceMonitor` or `None` (bring your own) |
@@ -146,7 +147,7 @@ kubectl get riakcluster
 | `members[]`, `nodeConditions[]` | Per node: `ready`, `health` (`Healthy`/`Unhealthy`/`Unknown`), `phase`, `storageReady`, storage class/size |
 | `securityEnabled` | Riak security has been enabled (done once, when the first user is created) |
 | `storageClassName`, `storageSize`, `ephemeralStorage` | The storage actually in use |
-| `tlsStatus` | `enabled`, `certManagerReady`, `certManagerError`, `interNodeReady`, `clientReady` |
+| `tlsStatus` | `enabled`, `certManagerReady`, `certManagerError`, `interNodeReady`, `clientReady`, `trustedClientCAs`, `trustBundleError` |
 | `monitoringStatus` | `enabled`, `exporterReady`, `scrapeKind`, `scrapeObjectReady`, `exporterError` (`serviceMonitorReady` is deprecated) |
 | `buckets[]`, `users[]` | The RiakBuckets / RiakUsers targeting this cluster and whether they are ready |
 

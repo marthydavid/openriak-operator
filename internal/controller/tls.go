@@ -19,6 +19,7 @@ package controller
 import (
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -118,6 +119,7 @@ func buildClusterCertificate(cluster *riakv1.RiakCluster) *unstructured.Unstruct
 // RiakUser's client certificate. The CommonName is set to the Riak username so that Riak's
 // certificate security source can match it.
 func buildUserCertificate(riakUserName, namespace, riakUsername string, certRef *riakv1.UserCertificateRef) *unstructured.Unstructured {
+	// Only called for cert-manager issued certificates (issuerRef set).
 	issuerKind := certRef.IssuerRef.Kind
 	if issuerKind == "" {
 		issuerKind = "Issuer"
@@ -148,6 +150,42 @@ func buildUserCertificate(riakUserName, namespace, riakUsername string, certRef 
 					"client auth",
 					"digital signature",
 					"key encipherment",
+				},
+			},
+		},
+	}
+}
+
+// tlsVolume returns the volume mounted at riakTLSMountPath. Normally it is the
+// cert-manager Secret as is. With spec.tls.additionalClientCAs it is a projected
+// volume taking tls.crt and tls.key from that Secret and ca.crt from the
+// operator-owned trust bundle (cluster CA + additional CAs), so Riak's
+// ssl.cacertfile trusts both while the file names stay the same.
+func tlsVolume(cluster *riakv1.RiakCluster) corev1.Volume {
+	if !hasAdditionalClientCAs(cluster) {
+		return corev1.Volume{
+			Name: riakTLSVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: clusterTLSSecretName(cluster.Name)},
+			},
+		}
+	}
+	return corev1.Volume{
+		Name: riakTLSVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{Secret: &corev1.SecretProjection{
+						LocalObjectReference: corev1.LocalObjectReference{Name: clusterTLSSecretName(cluster.Name)},
+						Items: []corev1.KeyToPath{
+							{Key: "tls.crt", Path: "tls.crt"},
+							{Key: "tls.key", Path: "tls.key"},
+						},
+					}},
+					{Secret: &corev1.SecretProjection{
+						LocalObjectReference: corev1.LocalObjectReference{Name: clusterTrustSecretName(cluster.Name)},
+						Items:                []corev1.KeyToPath{{Key: trustBundleKey, Path: "ca.crt"}},
+					}},
 				},
 			},
 		},
