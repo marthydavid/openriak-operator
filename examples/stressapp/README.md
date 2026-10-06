@@ -103,3 +103,18 @@ against them. See [Scaling](https://marthydavid.github.io/openriak-operator/scal
   0.0.11 select pods by that label alone in their required anti-affinity, so such a pod could not be scheduled
   on any node that runs a node of that cluster. Newer clusters select `app=riak,cluster=<name>` and are unaffected.
 - Tests for the protocol helpers: `python3 -m unittest examples/stressapp/test_riak_stress.py`.
+
+## Constant rate, quorums and long runs
+
+For soak tests the client can hold a fixed load instead of going as fast as it can:
+
+| Flag | Meaning |
+|------|---------|
+| `--rate OPS` | constant total operations per second (open loop: each thread follows a fixed schedule and never bursts to catch up; missed slots are counted as `late`) |
+| `--pr N` / `--pw N` | primary read / write quorum sent with every request |
+| `--bucket a,b,c` | rotate over several buckets; `--bucket-type` is one type for all, or one per bucket in the same order |
+| `--keyspace N` | keys each thread keeps per bucket; once full every write overwrites, so client memory stays bounded on long runs |
+| `--window S` | print a `WINDOW {json}` line to stderr every S seconds: that interval's ops/s, failed operations, late slots and p50/p95/p99 |
+
+The offline tests (`make test-stressapp`) cover the pacing, the quorum fields, the bucket rotation and the
+bounded keyspace against an in-memory fake Riak.

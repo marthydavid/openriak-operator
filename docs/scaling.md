@@ -202,6 +202,58 @@ It prints a table per cluster (ops/s, put and get latency p50/p95/p99, errors, l
     The client is a Python script. It is a load generator for checking correctness and behavior under
     concurrent load, not a measurement of Riak's maximum throughput; add `-stress-clients` to push harder.
 
+### Soak test: a constant load for hours
+
+`-soak` is a different kind of run: instead of "how fast", it asks "does one cluster hold a
+**constant** load for hours, and what happens to it". It builds one TLS cluster, `-soak-buckets`
+buckets (each with its own bucket type, `n_val` 3, `pr`/`pw` 2) and `-soak-users` certificate users,
+and starts one client per user. Every client rotates over all buckets at its share of `-soak-rate`
+(default 200 ops/s in total, 50% reads, 16 KiB values), sending `pr`/`pw` with every request.
+
+```bash
+# the defaults: 3 nodes, 300Gi PVC each, 10 buckets, 10 users, 200 ops/s, 4 hours
+go run ./test/scale -soak -storage-class lvms-vg1 -operator-namespace openriak-operator -verify-timeout 15m
+
+make soak-test STORAGE_CLASS=lvms-vg1 DURATION=4h
+```
+
+A 4-hour run outlives most terminals and tool timeouts: start it detached (`nohup setsid ... > soak.log &`
+on a host close to the cluster) and follow the log.
+
+Every `-soak-check` (30s) the harness samples the pods (restarts, `OOMKilled`), `kubectl top` (memory
+against the limit), the data volumes (`df`), and the clients' own `WINDOW` lines (achieved ops/s,
+failed share, worst p99). A policy acts on that, with a cooldown (`-soak-cooldown`, 20m) between actions:
+
+| Observation | Action |
+|-------------|--------|
+| a Riak container was `OOMKilled`, or its working set is above `-soak-mem-pressure` (85%) of the limit for 3 samples | raise every node's memory request and limit by 50% (rounded to 256Mi), up to `-soak-max-memory` |
+| memory is already at its cap, or p99 stays above `-soak-p99` / throughput below `-soak-min-rate` for 5 samples | add a node, up to `-soak-max-replicas` **and the number of schedulable Kubernetes nodes** |
+
+It never scales in, never acts while a node is down or restarting, and reports an action that leaves the
+cluster not ready for `-soak-action-timeout` as **stalled** (a failure). Riak pods carry a required pod
+anti-affinity (one per Kubernetes node), so on a 3-node Kubernetes cluster the scaler can raise memory but
+can never add a 4th Riak node; it knows that and says so at start-up.
+
+The report gives throughput against the target, latency percentiles, the clients' error breakdown,
+integrity (lost/corrupt values, and a final read of every key), OOM kills and restarts, peak memory and
+disk, warning events and the timeline of actions. The run **fails** on lost or corrupt data, a failed-operation
+share above `-soak-max-error-rate` (0.5%), throughput below `-soak-min-rate` (90%) of the target, a stalled
+action, errors while the cluster was healthy, or a cluster that does not end Ready; it then verifies Riak
+against the CRs as the other modes do.
+
+!!! warning "A 3-node cluster does not survive a node restart with `pr=2` / `pw=2`"
+    With only 3 nodes Riak cannot place all three replicas of every partition on different nodes (its
+    `target_n_val` is 4). When one node restarts, some partitions are left with a single live primary and
+    requests asking for 2 (`pr_val_unsatisfied`, `pw_val_unsatisfied`) fail for those keys, for the minutes
+    the node needs to come back. In the smoke runs a rolling restart under load meant 9–16% failed
+    operations for about two minutes per restart (nothing lost or corrupt). Any change that rolls the
+    nodes (a memory increase, an upgrade) causes this; with `pr=1`/`pw=1`, or five or more nodes, it does not.
+    The report's "steady state" line leaves these windows out.
+
+The client behind it, `examples/stressapp/riak_stress.py`, also takes `--rate` (constant open-loop rate),
+`--pr`/`--pw`, several buckets (`--bucket a,b,c` with one `--bucket-type` or one per bucket), `--keyspace`
+(bounds the keys each thread keeps, so a long run overwrites instead of growing) and `--window`.
+
 ### Verifying Riak metrics
 
 With `-monitoring` (or `make scale-test MONITORING=true`) every RiakCluster is
