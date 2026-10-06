@@ -143,6 +143,8 @@ func main() {
 	flag.Float64Var(&o.soak.minRateRatio, "soak-min-rate", 0.9, "share of -soak-rate the clients must sustain")
 	flag.DurationVar(&o.soak.actionTimeout, "soak-action-timeout", 20*time.Minute,
 		"a scaling action that leaves the cluster not ready this long is reported as stalled")
+	flag.Float64Var(&o.soak.memPressure, "soak-mem-pressure", 0.85,
+		"working set / memory limit above this for 3 samples raises the memory limit")
 	flag.BoolVar(&o.soak.noScale, "soak-no-scale", false, "only observe: never change the cluster")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")

@@ -22,7 +22,7 @@ func soakTestOpts() opts {
 			readRatio: 0.5, valueSize: 16384, nVal: 3, pr: 2, pw: 2, storage: "300Gi", memory: "4Gi",
 			maxMemory: "16Gi", cpu: "2", replicas: 3, maxReplicas: 5, check: 30 * time.Second, window: time.Minute,
 			cooldown: 20 * time.Minute, p99Limit: 1000, maxErrRate: 0.005, minRateRatio: 0.9,
-			actionTimeout: 20 * time.Minute,
+			actionTimeout: 20 * time.Minute, memPressure: 0.85,
 		},
 	}
 }
@@ -155,6 +155,8 @@ func TestValidateSoak(t *testing.T) {
 		"rate too low":       func(s *soakOpts) { s.rate = 1 },
 		"no users":           func(s *soakOpts) { s.users = 0 },
 		"bad storage":        func(s *soakOpts) { s.storage = "x" },
+		"pressure zero":      func(s *soakOpts) { s.memPressure = 0 },
+		"pressure above one": func(s *soakOpts) { s.memPressure = 1.5 },
 		"nval zero":          func(s *soakOpts) { s.nVal = 0 },
 	} {
 		s := good
