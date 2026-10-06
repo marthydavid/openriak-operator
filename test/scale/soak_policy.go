@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -33,7 +34,8 @@ import (
 // soakSample is one observation of the cluster and its clients.
 type soakSample struct {
 	At           time.Time
-	ClusterReady bool    // phase Ready and every node ready
+	ClusterReady bool    // phase Ready and every desired node ready
+	AllNodesUp   bool    // every node that is scheduled is ready (a Pending, unschedulable pod does not count)
 	OOMKills     int     // cumulative OOMKilled terminations of Riak containers
 	Restarts     int     // cumulative restarts of Riak containers
 	MemPct       float64 // highest Riak working set / its memory limit; 0 when unknown
@@ -143,8 +145,8 @@ func (s *soakScaler) decide(now time.Time, hist []soakSample, memory resource.Qu
 		return none("no samples yet")
 	}
 	cur := hist[len(hist)-1]
-	if !cur.ClusterReady {
-		return none("cluster is not ready (restart or ring change in progress)")
+	if !cur.AllNodesUp {
+		return none("a node is down or restarting")
 	}
 	if !s.lastAction.IsZero() && now.Sub(s.lastAction) < p.Cooldown {
 		return none("cooling down after the last action")
@@ -154,11 +156,11 @@ func (s *soakScaler) decide(now time.Time, hist []soakSample, memory resource.Qu
 		if mem, ok := nextMemory(memory, p.MaxMemory); ok {
 			return soakAction{Kind: actionMemory, Memory: mem, Reason: reason}
 		}
-		if size < p.MaxSize {
+		if size < p.MaxSize && cur.ClusterReady {
 			return soakAction{Kind: actionScaleOut, Size: size + 1,
 				Reason: reason + "; memory is already at its cap"}
 		}
-		return none(reason + "; memory and node count are both at their caps")
+		return none(reason + "; memory is at its cap and no node can be added (limit reached or cluster not ready)")
 	}
 
 	if cur.OOMKills > s.oomAtAction {
@@ -178,12 +180,16 @@ func (s *soakScaler) decide(now time.Time, hist []soakSample, memory resource.Qu
 		return tooSlow || tooLittle
 	}
 	if lastN(recent, p.SlowSamples, slow) {
+		if !cur.ClusterReady {
+			return none("too slow, but the cluster is not fully ready, so no node is added")
+		}
 		if size < p.MaxSize {
 			return soakAction{Kind: actionScaleOut, Size: size + 1, Reason: fmt.Sprintf(
 				"too slow for %d samples: %.0f ops/s of %.0f, worst p99 %.0f ms (limit %.0f)",
 				p.SlowSamples, cur.Rate, p.TargetRate, cur.P99, p.P99Limit)}
 		}
-		return none("too slow, but the cluster is at its maximum size")
+		return none("too slow, but the cluster is at its maximum size (limited by -soak-max-replicas or by the " +
+			"number of schedulable Kubernetes nodes)")
 	}
 	return none("healthy")
 }
@@ -309,4 +315,45 @@ func aggregateWindows(
 		errRate = float64(errs) / float64(ops+errs)
 	}
 	return rate, errRate, p99, n
+}
+
+// schedulableNodes counts the Kubernetes nodes a Riak pod could run on. Riak pods carry a required
+// pod anti-affinity (one per node), so the cluster cannot have more nodes than this.
+func schedulableNodes(nodes []corev1.Node) int {
+	n := 0
+	for _, node := range nodes {
+		if node.Spec.Unschedulable {
+			continue
+		}
+		for _, c := range node.Status.Conditions {
+			if c.Type == corev1.NodeReady && c.Status == corev1.ConditionTrue {
+				n++
+				break
+			}
+		}
+	}
+	return n
+}
+
+// nodesUp reports whether every Riak pod that has been scheduled is ready. A pod that is Pending
+// without a node (a scale-out that cannot be placed) is ignored: it is not "down", it never ran.
+func nodesUp(pods []corev1.Pod) bool {
+	for _, p := range pods {
+		if p.Spec.NodeName == "" {
+			continue
+		}
+		if p.DeletionTimestamp != nil || !podReady(p) {
+			return false
+		}
+	}
+	return true
+}
+
+func podReady(p corev1.Pod) bool {
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
