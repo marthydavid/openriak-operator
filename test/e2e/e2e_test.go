@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,7 +44,7 @@ func riakAdmin(args ...string) *exec.Cmd {
 	kubectlArgs := []string{"exec", "-n", "default", "e2e-cluster-0", "-c", "riak", "--", "sh", "-c",
 		`VMARGS_PATH=$(ls -1 /var/lib/riak/generated.conf/vm.*.args 2>/dev/null | tail -1) exec riak-admin "$@"`,
 		"riak-admin"}
-	return exec.Command("kubectl", append(kubectlArgs, args...)...)
+	return exec.Command("kubectl", slices.Concat(kubectlArgs, args)...)
 }
 
 // collectDiagnostics gathers logs and events from the operator and Riak operand pods

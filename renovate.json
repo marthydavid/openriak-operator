@@ -43,21 +43,21 @@
       ]
     },
     {
-      "description": "The go directive in go.mod is a deliberate floor, not something to chase. CI, the builder image and golangci-lint v1.59 are all pinned to the same Go line; raising it is a manual decision.",
+      "description": "The go directive in go.mod is a deliberate floor, not something to chase. CI, the builder image and golangci-lint are all pinned to the same Go line; raising it is a manual decision.",
       "matchDatasources": [
         "golang-version"
       ],
       "enabled": false
     },
     {
-      "description": "Keep the builder image on the Go line the module targets. golangci-lint v1.59 cannot parse export data from a newer Go, so a silent bump here breaks the lint job.",
+      "description": "Keep the builder image on the Go line the module targets. golangci-lint cannot parse export data from a newer Go than it was built with, so a silent bump here can break the lint job.",
       "matchDatasources": [
         "docker"
       ],
       "matchPackageNames": [
         "golang"
       ],
-      "allowedVersions": "<1.23"
+      "allowedVersions": "<1.26"
     },
     {
       "description": "The Riak operand image pins per-architecture bases and full RPM URLs that were chosen by hand (some upstream aarch64 builds SIGILL on non-SVE arm64 — see CLAUDE.md). Version changes here are a curation decision, never an automatic one.",

@@ -1,19 +1,19 @@
 ---
 name: pre-push
-description: Run the repo's CI checks (gofmt, go vet, the pinned golangci-lint v1.59.1 under Go 1.22, unit tests) before every git push, commit that will be pushed, or PR create/update in the OpenRiak operator repo. Use ALWAYS before pushing; skipping it is why lint keeps failing in CI.
+description: Run the repo's CI checks (gofmt, go vet, the pinned golangci-lint v2.14.0, unit tests) before every git push, commit that will be pushed, or PR create/update in the OpenRiak operator repo. Use ALWAYS before pushing; skipping it is why lint keeps failing in CI.
 ---
 
 # Pre-push checks
 
 CI lint has failed repeatedly on things `go vet` and `gofmt` do not catch (`lll`, `prealloc`,
 `goconst`, `unparam`). The cause was never running the real linter locally: a globally installed
-`golangci-lint` is a newer major version that cannot read `.golangci.yml`, and a newer local Go
-cannot build or run the pinned v1.59.1. So: **never push without this.**
+`golangci-lint` may be a different major version that cannot read `.golangci.yml` (the config is
+golangci-lint v2 format). So: **never push without this.**
 
 ## Do this before every push / PR create / PR update
 
 ```bash
-hack/pre-push.sh          # gofmt, go vet, golangci-lint v1.59.1 on Go 1.22, unit tests
+hack/pre-push.sh          # gofmt, go vet, golangci-lint v2.14.0, unit tests
 FAST=1 hack/pre-push.sh   # same, skipping the slow envtest controller tests (still run them before the final push)
 ```
 
@@ -41,8 +41,8 @@ Only suppress with `//nolint:<linter> // reason` when the finding is genuinely a
 
 ## If the tooling itself fails
 
-- `go: downloading go1.22.12` on first use is expected (Go fetches the toolchain).
-- `invalid array length` building golangci-lint means the pinned toolchain was not used: run through
-  `GOTOOLCHAIN=go1.22.12 make lint` (the script does).
+- The local Go must be at least the version in `go.mod` (1.25); with `GOTOOLCHAIN=auto` (the default)
+  Go fetches it on first use.
+- Test binaries aborting with `missing LC_UUID` means a Go older than 1.23 on a recent macOS: use Go 1.25+.
 - `unsupported version of the configuration` means a global `golangci-lint` was invoked instead of the
   pinned one in `$LOCALBIN`.

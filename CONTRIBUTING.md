@@ -6,7 +6,7 @@ We welcome contributions! This guide will help you get started.
 
 ### Prerequisites
 
-- Go 1.26+
+- Go 1.25+
 - Make
 - Docker
 - kubectl
