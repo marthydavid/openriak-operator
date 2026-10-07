@@ -477,7 +477,7 @@ See [Troubleshooting](docs/troubleshooting.md) for symptoms and fixes.
 
 ### Scaling
 
-Running the operator at fleet scale (dozens of clusters, hundreds of users/buckets)? See [docs/scaling.md](docs/scaling.md) for behaviour notes and a load-test harness (`make scale-test`, `MONITORING=true` to also verify Riak's Prometheus metrics).
+Running the operator at fleet scale (dozens of clusters, hundreds of users/buckets)? See [docs/scaling.md](docs/scaling.md) for behaviour notes and a load-test harness (`make scale-test`, `MONITORING=true` to also verify Riak's Prometheus metrics). For long, constant-load runs (OOM watching, scaling decisions, saved metrics and logs) see the soak test in the same page and its [results with charts](docs/soak-test-results.md) (`make soak-test`).
 
 ## Development Setup
 

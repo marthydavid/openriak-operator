@@ -50,9 +50,15 @@ Install *cert-manager Operator for Red Hat OpenShift* (OKD: community cert-manag
 | CSI / cloud classes | `gp3-csi`, `thin-csi`, … |
 | None available | `ephemeralStorage: true` — **non-durable**, for tests only |
 
-Node-local storage plus the required hostname anti-affinity means a 3-node cluster needs three
-nodes that each have a volume available. A node loss makes that Riak node unavailable until the
-node returns; Riak replicates across the other nodes.
+Node-local storage plus the default `Required` hostname anti-affinity means a 3-node cluster needs three
+nodes that each have a volume available, and a cluster can never be larger than the number of schedulable
+nodes. A node loss makes that Riak node unavailable until the node returns; Riak replicates across the
+other nodes. On a test cluster you can set `spec.podAntiAffinity: Preferred` to run more Riak nodes than
+Kubernetes nodes (see [Running more Riak nodes than Kubernetes nodes](../crds/riakcluster.md#running-more-riak-nodes-than-kubernetes-nodes));
+with it, losing one Kubernetes node can take out several Riak nodes at once.
+
+Before you pick a load for a test, check the **NIC speed** of the nodes (`/sys/class/net/<nic>/speed`): with
+`n_val` 3 the network, not Riak, is usually the limit. See [Sizing a load for your network](../scaling.md#sizing-a-load-for-your-network).
 
 ## Image mirrors
 
