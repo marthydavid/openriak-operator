@@ -3,8 +3,9 @@
 The operator watches RiakCluster, RiakBucket and RiakUser resources in all namespaces.
 Default operand image: {{ .Values.riak.image }}
 
-RiakUsers authenticate with mTLS client certificates issued by cert-manager, which
-must be installed for TLS-enabled clusters and users:
+RiakUsers authenticate with mTLS client certificates, issued by cert-manager or
+supplied from an external CA. cert-manager must be installed for the node
+certificate of TLS-enabled clusters:
   https://cert-manager.io/docs/installation/
 
 Quick start:

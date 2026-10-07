@@ -1,27 +1,40 @@
-# mTLS with cert-manager
+# mTLS authentication
 
-The operator integrates with [cert-manager](https://cert-manager.io) to secure a Riak
-cluster end to end:
+Every `RiakUser` authenticates to Riak with a **client certificate** (mTLS); there are no
+passwords. The operator secures a cluster in two parts, and each has its own certificate source:
 
-1. **Cluster TLS** — the operator requests a server certificate for every node in a
-   `RiakCluster` and configures Riak's HTTPS listener with it.
-2. **mTLS client authentication** — every `RiakUser` authenticates with a client
-   certificate; it is the only supported mode. The operator requests the client
-   certificate from cert-manager and registers the user with Riak's `certificate`
-   security source.
+| What | Certificate source | Configured in |
+|------|--------------------|---------------|
+| **Node (server) certificate**: Riak's HTTPS and protobuf TLS listeners | [cert-manager](https://cert-manager.io) | `RiakCluster.spec.tls.certManager` |
+| **User (client) certificates**: how a `RiakUser` proves its identity | **cert-manager** *or* an **external CA** (corporate PKI, Vault, ...) | `RiakUser.spec.certificateRef` |
 
-The operator never generates keys or runs its own CA; issuance and renewal are fully
-delegated to cert-manager.
+Pick the user-certificate source per user; both can be mixed in one cluster. In both cases Riak
+matches the user by the certificate's **CommonName**, which must equal `spec.username`, and the
+certificate must chain to a CA the cluster trusts.
+
+| | cert-manager | External CA |
+|---|---|---|
+| `certificateRef` | `issuerRef` | `externalSecretName` |
+| Who issues and renews | cert-manager, through a `Certificate` the operator creates | You (your PKI, Vault, ...) |
+| What the operator does with the certificate | Requests it | Validates it and reports the result in status |
+| Trust | Same CA as the cluster certificate | List the CA in `spec.tls.additionalClientCAs` |
+| Details | [below](#client-certificates-from-cert-manager) | [below](#client-certificates-from-an-external-ca) |
+
+The operator never generates keys or runs its own CA.
 
 ## Prerequisites
 
-- cert-manager v1.x installed in the cluster
-  (`kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml`)
-- An `Issuer` or `ClusterIssuer` that can sign the certificates. Cluster and client
-  certificates must chain to the same CA — Riak verifies client certificates against
-  the CA bundle from its own TLS secret.
+- A cluster with TLS enabled (`spec.tls.enabled: true`).
+- **Node certificate:** cert-manager v1.x with an `Issuer` or `ClusterIssuer`
+  (`kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml`).
+  This is needed for the cluster certificate even when every user's certificate comes from an
+  external CA; external server certificates are not supported yet.
+- **User certificates from cert-manager:** an issuer whose CA is the same one the cluster certificate
+  chains to, because Riak verifies client certificates against the CA bundle it was given.
+- **User certificates from an external CA:** the CA certificate (PEM) in a Secret or ConfigMap, and
+  each user's certificate and key in a Secret.
 
-### Example: a namespace-local CA
+### Example: a namespace-local CA for cert-manager
 
 ```yaml
 apiVersion: cert-manager.io/v1
@@ -55,9 +68,9 @@ spec:
     secretName: riak-ca-secret
 ```
 
-## Cluster TLS
+## Cluster TLS (node certificate)
 
-Enable TLS on a `RiakCluster` by setting `spec.tls`:
+Enable TLS on a `RiakCluster` by setting `spec.tls`. cert-manager issues the node certificate:
 
 ```yaml
 apiVersion: riak.openriak.io/v1
@@ -104,8 +117,8 @@ environment variables):
 | `listener.https.internal` | `0.0.0.0:8443` |
 | `check_crl` | `off` |
 
-`check_crl` is disabled because cert-manager-issued client certificates have no
-CRL distribution point; leaving it on makes Riak's protobuf TLS handshake fail
+`check_crl` is disabled because client certificates usually carry no CRL distribution
+point (cert-manager-issued ones do not); leaving it on makes Riak's protobuf TLS handshake fail
 on such certificates.
 
 Both the headless and the client `Service` expose the HTTPS listener as port
@@ -113,15 +126,34 @@ Both the headless and the client `Service` expose the HTTPS listener as port
 
 ### Certificate rotation
 
-cert-manager renews the certificate before expiry and updates the secret in place.
+cert-manager renews the node certificate before expiry and updates the secret in place.
 Kubernetes propagates the new files into the running pods' mounted volume; no
 operator action is required. Riak reads the certificate files at connection setup,
 so new connections pick up the renewed certificate automatically.
 
-## mTLS client authentication for RiakUsers
+## Client certificates for RiakUsers
 
-Every `RiakUser` authenticates with an mTLS client certificate — `spec.certificateRef`
-is required:
+`spec.certificateRef` is required and takes **exactly one** of `issuerRef` (cert-manager) or
+`externalSecretName` (external CA). Whichever you use, the operator then:
+
+1. Enables Riak security if not already enabled (`riak-admin security enable`), then creates the
+   user (`riak-admin security add-user`).
+2. Registers the certificate source
+   (`riak-admin security add-source <username> 0.0.0.0/0 certificate`).
+3. Makes the user's Riak grants equal `spec.grants`: it grants everything the spec lists, then
+   reads `riak-admin security print-grants` and revokes any permission the spec no longer lists.
+   Removing a grant from the RiakUser removes the access in Riak; an empty `grants` list revokes
+   all of them.
+4. Reports the state of the certificate in `status.certificateReady` / `status.certificateError`
+   and the `CertificateReady` condition. `status.phase: Ready` only means the Riak-side identity
+   exists.
+
+Deleting a RiakUser runs `riak-admin security del-user`, which removes the user together with its
+grants and certificate source. This is best effort: it is skipped when the cluster is missing,
+being deleted or not Ready, and given up after two minutes of failures so the RiakUser never gets
+stuck.
+
+### Client certificates from cert-manager
 
 ```yaml
 apiVersion: riak.openriak.io/v1
@@ -146,41 +178,23 @@ spec:
       permission: write
 ```
 
-`certificateRef` is required: client certificates are the only supported authentication mode.
-
-### What the operator does
-
-1. Creates a cert-manager `Certificate` named `<riakuser-name>-client-tls` with
-   **`commonName` set to `spec.username`** — Riak's certificate security source
-   matches users by certificate CN, so the two must be identical. Usages:
-   `client auth`, `digital signature`, `key encipherment`.
-2. Enables Riak security if not already enabled (`riak-admin security enable`),
-   then creates the user (`riak-admin security add-user`).
-3. Registers the certificate source
-   (`riak-admin security add-source <username> 0.0.0.0/0 certificate`).
-4. Makes the user's Riak grants equal `spec.grants`: it grants everything the
-   spec lists, then reads `riak-admin security print-grants` and revokes any
-   permission the spec no longer lists. Removing a grant from the RiakUser
-   removes the access in Riak; an empty `grants` list revokes all of them.
-
-Deleting a RiakUser runs `riak-admin security del-user`, which removes the user
-together with its grants and certificate source. This is best effort: it is
-skipped when the cluster is missing, being deleted or not Ready, and given up
-after two minutes of failures so the RiakUser never gets stuck.
-
-cert-manager writes the issued certificate to the secret (default
-`<riakuser-name>-client-tls`) containing `tls.crt`, `tls.key`, and `ca.crt`.
+The operator creates a cert-manager `Certificate` named `<riakuser-name>-client-tls` with
+**`commonName` set to `spec.username`**. Usages: `client auth`, `digital signature`,
+`key encipherment`. cert-manager writes the issued certificate to the Secret (default
+`<riakuser-name>-client-tls`) with `tls.crt`, `tls.key` and `ca.crt`, and renews it.
 
 ### Connecting a client
 
-Mount the client secret into the application pod and connect to the protobuf port
-with TLS, presenting the client certificate:
+Mount the Secret that holds the user's certificate into the application pod (for cert-manager
+users that is `<riakuser-name>-client-tls`, for external users the Secret you named in
+`externalSecretName`) and connect to the protobuf port with TLS, presenting the client
+certificate. `ca.crt` must be the CA that signed the cluster's node certificate:
 
 ```yaml
 volumes:
   - name: riak-client-tls
     secret:
-      secretName: app-cert-user-client-tls
+      secretName: app-cert-user-client-tls   # or your externalSecretName
 ```
 
 ```python
@@ -199,13 +213,13 @@ client = riak.RiakClient(
 
 For a dependency-free reference, `test/e2e/scripts/pb_cert_auth_check.py` speaks the
 Riak protobuf STARTTLS handshake directly (standard library only) and performs an
-authenticated write/read — useful for verifying cert auth from a debug pod.
+authenticated write/read, which is useful for verifying certificate auth from a debug pod.
 
 ## Client certificates from an external CA
 
-Client certificates do not have to come from cert-manager. If your users' certificates are
-issued by another CA (a corporate PKI, Vault, ...), tell the cluster to **trust that CA** and
-point each `RiakUser` at the **Secret that already holds its certificate**.
+If your users' certificates are issued by another CA (a corporate PKI, Vault, ...), tell the
+cluster to **trust that CA** and point each `RiakUser` at the **Secret that already holds its
+certificate**. Nothing about the user's certificate is requested from cert-manager.
 
 ```yaml
 apiVersion: riak.openriak.io/v1
@@ -274,33 +288,51 @@ their current bundle.
       RiakUser or distrusting the CA.
     - The server (node) certificate still has to come from cert-manager; external server
       certificates are not supported yet.
+    - The operator does not renew an external certificate. It reports expiry in status; renewal
+      and updating the Secret are yours.
 
 ## Troubleshooting
 
-**`RiakUser` stuck in `Failed` with a certificate error** — check that the
-`Certificate` was issued:
+**`RiakUser` shows `Cert` false or `certificateError` set** — read the error first:
 
 ```bash
-kubectl get certificate <riakuser-name>-client-tls -o wide
-kubectl describe certificate <riakuser-name>-client-tls
+kubectl get riakuser <name> -o jsonpath='{.status.certificateError}{"\n"}'
 ```
 
-**Clients get `certificate verify failed`** — the client certificate and the
-cluster certificate must chain to the same CA. Verify both issuers reference the
-same CA secret, and check what Riak trusts:
+- *cert-manager users:* check that the `Certificate` was issued:
+
+    ```bash
+    kubectl get certificate <riakuser-name>-client-tls -o wide
+    kubectl describe certificate <riakuser-name>-client-tls
+    ```
+
+- *External-CA users:* the error names what failed: Secret or `tls.crt` missing, CommonName not
+  equal to `spec.username`, no `client auth` usage, expired, or not chaining to a trusted CA. For
+  the last one, add the CA to `spec.tls.additionalClientCAs` and check
+  `status.tlsStatus.trustBundleError`.
+
+**Clients get `certificate verify failed`** — the client certificate must chain to a CA the
+cluster trusts. See which CAs Riak was given:
 
 ```bash
-kubectl get secret <cluster>-tls -o jsonpath='{.data.ca\.crt}' | base64 -d | \
-  openssl x509 -noout -subject -issuer
+kubectl get secret <cluster>-tls-trust -o jsonpath='{.data.ca\.crt}' | base64 -d | \
+  openssl crl2pkcs7 -nocrl -certfile /dev/stdin | openssl pkcs7 -print_certs -noout
 ```
 
-**Authentication fails despite a valid certificate** — the certificate CN must
-equal the Riak username. Inspect the issued certificate:
+`<cluster>-tls-trust` is the cluster CA plus every `additionalClientCAs` entry. For cert-manager
+users also verify both issuers reference the same CA secret. In the other direction, the client
+must trust the CA that signed the *node* certificate (`<cluster>-tls`, key `ca.crt`).
+
+**Authentication fails despite a valid certificate** — the certificate CN must equal the Riak
+username. Inspect it (use the Secret you actually mounted):
 
 ```bash
-kubectl get secret <riakuser-name>-client-tls -o jsonpath='{.data.tls\.crt}' | \
+kubectl get secret <secret-name> -o jsonpath='{.data.tls\.crt}' | \
   base64 -d | openssl x509 -noout -subject
 ```
 
 **Certificates are created but pods have no TLS volume** — `spec.tls.enabled`
 must be `true`; setting only `certManager` is not enough.
+
+**External CA changed but clients still fail** — restart the Riak pods; a running node may not
+re-read `ca.crt`.

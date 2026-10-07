@@ -31,7 +31,7 @@ oc apply -k config/default --server-side
 oc new-project riak
 ```
 
-Create a CA-backed `Issuer` in that project (see [mTLS](../mtls.md#example-a-namespace-local-ca)).
+Create a CA-backed `Issuer` in that project (see [mTLS](../mtls.md#example-a-namespace-local-ca-for-cert-manager)).
 
 ## 3. Create a cluster
 

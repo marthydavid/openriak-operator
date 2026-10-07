@@ -10,9 +10,10 @@ A production-ready Kubernetes operator for managing Riak clusters with full life
 - **Configuration Management**: Dynamic Riak configuration through RiakCluster CRDs
 - **User & ACL Management**: Create users and manage granular access grants via RiakUser resources
 - **Bucket Management**: Automated bucket type and bucket provisioning via RiakBucket resources
-- **mTLS via cert-manager**: Enable TLS on a cluster (`spec.tls`) to have cert-manager issue the
-  server certificate, and authenticate users with client certificates (`spec.certificateRef`) — the
-  issued certificate's CommonName is the Riak username ([full guide](docs/mtls.md))
+- **mTLS authentication**: Enable TLS on a cluster (`spec.tls`; cert-manager issues the node
+  certificate) and authenticate users with client certificates (`spec.certificateRef`), issued
+  either by cert-manager or by an external CA you bring (`spec.tls.additionalClientCAs`). The
+  certificate's CommonName is the Riak username ([full guide](docs/mtls.md))
 - **Configurable Operand Image**: Set a fleet-wide default Riak image via the operator's
   `--riak-image` flag, overridable per cluster with `spec.image` ([config reference](docs/operator-configuration.md))
 - **Health Checks**: Lightweight TCP liveness/readiness probes on the protobuf port
@@ -299,7 +300,9 @@ spec:
   username: appuser
 
   # mTLS client-certificate authentication (required — the only auth mode).
-  # cert-manager issues a certificate with CommonName == spec.username.
+  # Set exactly one of issuerRef (cert-manager issues a certificate with
+  # CommonName == spec.username) or externalSecretName (a Secret holding a
+  # certificate from an external CA; trust the CA via spec.tls.additionalClientCAs).
   certificateRef:
     issuerRef:
       name: my-ca-issuer
@@ -326,7 +329,7 @@ status:
   lastUpdateTime: "2024-05-18T10:30:00Z"
   username: appuser
   clusterName: my-cluster
-  certificateReady: true   # cert-manager has issued the client certificate
+  certificateReady: true   # the client certificate is issued (or, for an external one, valid and trusted)
   # certificateError: ...  # why it has not been issued yet, when it has not
   grants:                  # the grants applied to Riak
     - resource: any
@@ -343,17 +346,18 @@ status:
 ```
 
 `phase: Ready` covers the Riak-side identity (user, security source, grants). Certificate issuance
-is cert-manager's job and completes asynchronously, so it is reported separately in
+is asynchronous with cert-manager and is re-checked for external certificates, so it is reported separately in
 `certificateReady` / `certificateError` and the `CertificateReady` condition; the operator re-checks
 until the certificate is issued.
 
 #### Certificate-based (mTLS) authentication
 
 Users authenticate exclusively with mTLS client certificates — `certificateRef` is required.
-The operator asks cert-manager to issue a client certificate whose
-**CommonName equals `spec.username`**, which is what Riak matches for certificate auth. The cluster
-must have TLS enabled (`spec.tls.enabled: true`), and the user's issuer should chain to the same CA
-as the cluster's issuer so the node trusts the client certificate.
+The client certificate's **CommonName must equal `spec.username`**, which is what Riak matches for
+certificate auth. With `issuerRef` the operator asks cert-manager to issue it; with
+`externalSecretName` you supply a certificate from your own CA and the operator validates it. The
+cluster must have TLS enabled (`spec.tls.enabled: true`), and the certificate must chain to a CA the
+node trusts: the cluster issuer's CA, or one listed in `spec.tls.additionalClientCAs`.
 
 ```yaml
 apiVersion: riak.openriak.io/v1
