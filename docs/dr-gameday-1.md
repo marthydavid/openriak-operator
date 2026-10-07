@@ -12,7 +12,7 @@ the load and the read-back are the [soak harness](scaling.md#soak-test-a-constan
 
 | | |
 |---|---|
-| Date | 2026-10-07, started 22:44 (CEST) |
+| Date | 2026-10-07, started 22:25 (CEST); baseline from 22:28, first fault 22:38 |
 | Operator | `ghcr.io/marthydavid/openriak-operator:1.0.0` (`sha256:7b6fe7e4…`), swapped in for this run |
 | Riak | `ghcr.io/marthydavid/riak:3.2.6`, TLS, `ring_size` 128, 3 nodes |
 | Node resources | 8 GiB memory (request = limit), 2 CPU request, 50 GiB volume on `lvms-vg1` |
@@ -35,7 +35,7 @@ same 15 s.
 | Fault | What was done | Ready again | Effect on the load | Verdict |
 |---|---|---|---|---|
 | D1 | delete one Riak pod (`soak-1`) | 16 s after the 25 s pause | one 60 s window at 192 of 200 ops/s with 4.06 % errors, back to 200 ops/s and 0 % in the next; p99 stayed at 46 ms | recovered |
-| D7 | delete two pods at once | pending | pending | pending |
+| D7 | delete two pods at once (`soak-1`, `soak-2`) | 31 s after the 25 s pause | the cluster showed 1 of 3 nodes for a sample; two windows at 172 and 170 of 200 ops/s with 13.6 % and 14.0 % errors; p99 of the operations that succeeded stayed at 45 ms | recovered, no restart or OOM elsewhere |
 | D5 | delete one node's volume and pod | pending | pending | pending |
 | D3 | isolate one pod with a NetworkPolicy for 3 minutes | pending | pending | pending |
 | Read-back and `-verify-only` | every key read back after the load; Riak compared with the CRs | pending | pending | pending |
@@ -44,3 +44,8 @@ same 15 s.
 
 - **D1**: the replacement pod was `Running` 2/2 and the ring was whole when the cluster reported `Ready`; no
   restarts or OOM kills on the other nodes.
+- **D7**: with two of three nodes gone only one primary was left, so reads and writes that need `pr`/`pw` 2
+  fail until a second node is back; about 14 % of the operations in the affected minute errored, the rest
+  succeeded, and the cluster was `Ready` with three running pods 56 s after the pods were deleted. The client
+  windows are 60 s long, so one outage of under a minute shows in two consecutive windows. Whether any
+  acknowledged write was lost is only known after the read-back at the end of the run.
