@@ -797,7 +797,14 @@ func soakVerdict(
 		bad = append(bad, fmt.Sprintf("%d values were lost", lost))
 	}
 	if corrupt := sum.Total.Corrupt + sum.Total.FinalCorrupt; corrupt > 0 {
-		bad = append(bad, fmt.Sprintf("%d values were corrupt", corrupt))
+		bad = append(bad, fmt.Sprintf("%d values were corrupt (wrong bytes)", corrupt))
+	}
+	if sum.Total.Stale > 0 {
+		bad = append(bad, fmt.Sprintf("%d lost updates: reads returned an older version than was acknowledged",
+			sum.Total.Stale))
+	}
+	if sum.Total.Ahead > 0 {
+		bad = append(bad, fmt.Sprintf("%d reads returned a newer version nobody wrote or explains", sum.Total.Ahead))
 	}
 	if total := sum.Total.Ops + sum.Total.Errors; total > 0 {
 		if rate := float64(sum.Total.Errors) / float64(total); rate > s.maxErrRate {
@@ -842,10 +849,12 @@ func printSoakReport(o opts, st *soakState, sum stressSummary, results []stressR
 	pl, gl := bestLatency(results, "put"), bestLatency(results, "get")
 	fmt.Printf("latency (ms)   put p50/p95/p99 %.1f/%.1f/%.1f (worst client p99 %.1f) | get %.1f/%.1f/%.1f (worst %.1f)\n",
 		pl.P50, pl.P95, pl.P99, sum.WorstP99["put"], gl.P50, gl.P95, gl.P99, sum.WorstP99["get"])
-	fmt.Printf("integrity      errors %d, lost %d, corrupt %d, final-verified %d keys (lost %d, corrupt %d), "+
-		"late slots %d\n",
-		sum.Total.Errors, sum.Total.Lost, sum.Total.Corrupt, sum.Total.Verified, sum.Total.FinalLost,
-		sum.Total.FinalCorrupt, sum.Total.Late)
+	fmt.Printf("integrity      errors %d, lost %d, corrupt %d, stale %d, unexplained-newer %d, final-verified %d keys "+
+		"(lost %d, corrupt %d), late slots %d\n",
+		sum.Total.Errors, sum.Total.Lost, sum.Total.Corrupt, sum.Total.Stale, sum.Total.Ahead, sum.Total.Verified,
+		sum.Total.FinalLost, sum.Total.FinalCorrupt, sum.Total.Late)
+	fmt.Printf("               %d failed or timed-out writes reached Riak anyway (benign: the client did not know)\n",
+		sum.Total.Landed)
 	kinds := make([]string, 0, len(sum.Total.ErrorKinds))
 	for k := range sum.Total.ErrorKinds {
 		kinds = append(kinds, k)

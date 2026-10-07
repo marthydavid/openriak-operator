@@ -83,14 +83,25 @@ class FakeRiak:
     def __init__(self):
         self.lock = threading.Lock()
         self.data = {}      # (bucket, key) -> value
+        self.history = {}   # (bucket, key) -> the value before the latest one
         self.puts, self.gets = [], []
+        self.timeout_every = 0   # every Nth put stores the value, then times out (outcome unknown to the client)
+        self.garble_every = 0    # every Nth get returns a value with flipped bytes
+        self.stale_every = 0     # every Nth get returns the previous version of the key
+        self.n_put = self.n_get = 0
 
     def put(self, msg):
         f = {n: v for n, _, v in rs._parse_fields(msg)}
         content = {n: v for n, _, v in rs._parse_fields(f[4])}
         with self.lock:
+            if (f[1], f[2]) in self.data:
+                self.history[(f[1], f[2])] = self.data[(f[1], f[2])]
             self.data[(f[1], f[2])] = content[1]
             self.puts.append(f)
+            self.n_put += 1
+            timeout = self.timeout_every and self.n_put % self.timeout_every == 0
+        if timeout:
+            raise TimeoutError("The read operation timed out")
         return rs._field(2, b"vclock")
 
     def get(self, msg):
@@ -98,6 +109,11 @@ class FakeRiak:
         with self.lock:
             self.gets.append(f)
             value = self.data.get((f[1], f[2]))
+            self.n_get += 1
+            if value is not None and self.garble_every and self.n_get % self.garble_every == 0:
+                value = b"X" + value[1:]
+            if value is not None and self.stale_every and self.n_get % self.stale_every == 0:
+                value = self.history.get((f[1], f[2]), value)
         return rs._field(1, rs._field(1, value)) + rs._field(2, b"vc") if value is not None else b""
 
 
@@ -113,7 +129,7 @@ def fake_connection(riak):
             self.sock = None
 
         def call(self, code, data, want):
-            return riak.put(data) if code == rs.MSG_PUT_REQ else riak.get(data)
+            return riak.put(data) if code == rs.MSG_PUT_REQ else riak.get(data)  # may raise: a timeout
     return FakeConn
 
 
@@ -191,6 +207,49 @@ class Worker(unittest.TestCase):
         riak = FakeRiak()
         run_workers(riak, duration=1, rate=0, read_ratio=0.0, keyspace=0)
         self.assertGreater(len(riak.data), 50)
+
+
+class Integrity(unittest.TestCase):
+    """What counts as lost, corrupt, stale or merely 'landed'."""
+
+    def total(self, stats, name):
+        return sum(getattr(s, name) for s in stats)
+
+    def test_a_write_that_timed_out_but_landed_is_not_corruption(self):
+        riak = FakeRiak()
+        riak.timeout_every = 7
+        _, stats = run_workers(riak, duration=2, rate=0, read_ratio=0.5, keyspace=20, threads=2)
+        self.assertGreater(self.total(stats, "errors"), 0, "the writes did time out")
+        self.assertGreater(self.total(stats, "landed"), 0, "and some of them were read back later")
+        self.assertEqual(self.total(stats, "corrupt") + self.total(stats, "final_corrupt"), 0)
+        self.assertEqual(self.total(stats, "stale") + self.total(stats, "ahead") + self.total(stats, "lost"), 0)
+
+    def test_wrong_bytes_are_corrupt(self):
+        riak = FakeRiak()
+        riak.garble_every = 5
+        _, stats = run_workers(riak, duration=1, rate=0, read_ratio=0.5, keyspace=20, threads=2)
+        self.assertGreater(self.total(stats, "corrupt") + self.total(stats, "final_corrupt"), 0)
+
+    def test_an_older_version_is_stale_not_corrupt(self):
+        riak = FakeRiak()
+        riak.stale_every = 4
+        _, stats = run_workers(riak, duration=2, rate=0, read_ratio=0.5, keyspace=10, threads=2)
+        self.assertGreater(self.total(stats, "stale"), 0, "a lost update must be reported")
+        self.assertEqual(self.total(stats, "corrupt"), 0)
+
+    def test_judge(self):
+        mk = lambda v: rs.make_value("c0-", 1, 5, v, 128)
+        j = lambda values, expect, uncertain=None: rs.judge(values, expect, uncertain, "c0-", 1, 5, 128)
+        self.assertEqual(j([mk(3)], 3), ("ok", 3))
+        self.assertEqual(j([mk(2), mk(3)], 3), ("ok", 3), "siblings that include the expected version")
+        self.assertEqual(j([mk(4)], 3, uncertain=4), ("landed", 4))
+        self.assertEqual(j([mk(4)], 3), ("ahead", 4), "a newer version nobody can explain")
+        self.assertEqual(j([mk(5)], 3, uncertain=4), ("ahead", 5), "newer than even the unknown write")
+        self.assertEqual(j([mk(2)], 3), ("stale", 2))
+        self.assertEqual(j([b"c0-t1-5:v3:garbage"], 3)[0], "corrupt", "right header, wrong body")
+        self.assertEqual(j([b"something else entirely"], 3)[0], "corrupt")
+        self.assertEqual(j([rs.make_value("c0-", 1, 6, 3, 128)], 3)[0], "corrupt", "another key's value")
+        self.assertEqual(j([b"c0-t1-5:vX:abc"], 3)[0], "corrupt", "unparseable version")
 
 
 class Windows(unittest.TestCase):

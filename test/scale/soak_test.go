@@ -287,6 +287,17 @@ func TestSoakVerdict(t *testing.T) {
 	corrupt := good
 	corrupt.Total.Corrupt = 1
 	check("corrupt", corrupt, 10, ready, "1 values were corrupt")
+	stale := good
+	stale.Total.Stale = 3
+	check("stale", stale, 10, ready, "3 lost updates")
+	ahead := good
+	ahead.Total.Ahead = 2
+	check("ahead", ahead, 10, ready, "2 reads returned a newer version")
+	landed := good
+	landed.Total.Landed = 400
+	if bad := soakVerdict(o, &soakState{}, landed, 10, ready, nil); len(bad) != 0 {
+		t.Fatalf("writes that timed out but landed are not a failure: %v", bad)
+	}
 	errs := good
 	errs.Total.Errors = 100_000
 	check("errors", errs, 10, ready, "operations failed")

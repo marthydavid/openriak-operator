@@ -34,7 +34,8 @@ Usage
       --bucket-type TYPE[,TYPE...] --bucket BUCKET[,BUCKET...] [--threads 16] [--duration 60] \
       [--value-size 1024] [--read-ratio 0.7] [--port 8087] [--key-prefix c0-] \
       [--rate 0] [--pr N] [--pw N] [--keyspace 0] [--window 0]
-Exit status: 0 when there were no errors, lost or corrupt values; 2 otherwise.
+Exit status: 0 when there were no errors and no lost, corrupt, stale or unexplained values; 2 otherwise.
+A write that timed out but did reach Riak shows up as `landed`, which is not a failure.
 """
 import argparse
 import hashlib
@@ -248,11 +249,43 @@ def make_value(prefix, thread, n, version, size):
     return head + body
 
 
+def judge(values, expect, uncertain, prefix, vt, vn, size):
+    """Compare what a read returned with what this client last wrote.
+
+    Returns (kind, version): kind is
+      ok       the expected version is among the values;
+      landed   a newer version than expected, exactly the one of an earlier write whose outcome
+               was unknown (it timed out or the connection broke) and that did reach Riak: benign;
+      ahead    a newer version nobody can explain;
+      stale    an older version than expected: an acknowledged write was lost;
+      corrupt  a value that is not any version this client could have written (wrong bytes).
+    """
+    head = ("%st%d-%d:v" % (prefix, vt, vn)).encode()
+    seen = []
+    for v in values:
+        if not v.startswith(head):
+            return "corrupt", None
+        try:
+            vo = int(v[len(head):].split(b":", 1)[0])
+        except ValueError:
+            return "corrupt", None
+        if v != make_value(prefix, vt, vn, vo, size):
+            return "corrupt", None
+        seen.append(vo)
+    if expect in seen:
+        return "ok", expect
+    top = max(seen)
+    if uncertain is not None and top == uncertain:
+        return "landed", top
+    return ("ahead" if top > expect else "stale"), top
+
+
 class Stats:
     """Per-thread counters; merged at the end so threads never share state."""
 
     def __init__(self):
         self.puts = self.gets = self.errors = self.lost = self.corrupt = self.siblings = 0
+        self.stale = self.ahead = self.landed = 0
         self.put_ms, self.get_ms = [], []
         self.win_put, self.win_get = [], []   # latencies since the last WINDOW line
         self.win_errors = self.late = 0
@@ -282,6 +315,7 @@ class BucketState:
     def __init__(self):
         self.versions = {}   # n -> latest version written
         self.vclocks = {}    # n -> vclock of the latest write
+        self.uncertain = {}  # n -> version of a write whose outcome is unknown (it failed or timed out)
         self.next_key = 0
 
 
@@ -332,16 +366,14 @@ def worker(args, tid, deadline, stats, ready):
                 sample(stats.get_ms, ms)
                 stats.win_get.append(ms)
                 stats.gets += 1
-                values, _ = parse_get(body)
+                values, vclock = parse_get(body)
                 vt, vn = value_id(bi, n)
-                want = make_value(args.key_prefix, vt, vn, st.versions[n], args.value_size)
                 if not values:
                     stats.lost += 1
                 else:
                     if len(values) > 1:
                         stats.siblings += 1
-                    if want not in values:
-                        stats.corrupt += 1
+                    record_read(stats, st, n, values, vclock, args, vt, vn)
             else:
                 # Overwrite an existing key a third of the time, otherwise write a new one; once
                 # the keyspace is full every write overwrites.
@@ -354,8 +386,10 @@ def worker(args, tid, deadline, stats, ready):
                 vt, vn = value_id(bi, n)
                 value = make_value(args.key_prefix, vt, vn, version, args.value_size)
                 t0 = time.time()
+                st.uncertain[n] = version   # until Riak answers we do not know whether it was stored
                 body = conn.call(MSG_PUT_REQ, put_req(btypes[bi], bucket, key_bytes(bi, n), value,
                                                        st.vclocks.get(n), args.pw), MSG_PUT_RESP)
+                st.uncertain.pop(n, None)
                 ms = (time.time() - t0) * 1000
                 sample(stats.put_ms, ms)
                 stats.win_put.append(ms)
@@ -373,17 +407,41 @@ def worker(args, tid, deadline, stats, ready):
                 if conn.sock is None:
                     conn.open()
                 body = conn.call(MSG_GET_REQ, get_req(btypes[bi], buckets[bi], key_bytes(bi, n), args.pr), MSG_GET_RESP)
-                values, _ = parse_get(body)
+                values, vclock = parse_get(body)
                 stats.verified += 1
                 vt, vn = value_id(bi, n)
                 if not values:
                     stats.final_lost += 1
-                elif make_value(args.key_prefix, vt, vn, version, args.value_size) not in values:
-                    stats.final_corrupt += 1
+                else:
+                    record_read(stats, st, n, values, vclock, args, vt, vn, final=True)
             except (OSError, EOFError, RiakError, ssl.SSLError) as exc:
                 stats.error(exc)
                 conn.close()
     conn.close()
+
+
+def record_read(stats, st, n, values, vclock, args, vt, vn, final=False):
+    """Judge one read and count it; a newer version we can account for is adopted as the state."""
+    kind, version = judge(values, st.versions[n], st.uncertain.get(n), args.key_prefix, vt, vn, args.value_size)
+    if kind == "ok":
+        return
+    if kind == "corrupt":
+        if final:
+            stats.final_corrupt += 1
+        else:
+            stats.corrupt += 1
+        return
+    if kind == "landed":
+        stats.landed += 1
+        st.uncertain.pop(n, None)
+    elif kind == "ahead":
+        stats.ahead += 1
+    else:
+        stats.stale += 1
+    # Count each discrepancy once: continue from what Riak actually holds.
+    st.versions[n] = version
+    if vclock is not None:
+        st.vclocks[n] = vclock
 
 
 def window_record(all_stats, seconds):
@@ -488,6 +546,9 @@ def main(argv):
         "errors": sum(s.errors for s in all_stats),
         "lost": sum(s.lost for s in all_stats),
         "corrupt": sum(s.corrupt for s in all_stats),
+        "stale": sum(s.stale for s in all_stats),
+        "ahead": sum(s.ahead for s in all_stats),
+        "landed": sum(s.landed for s in all_stats),
         "siblings": sum(s.siblings for s in all_stats),
         "verified": sum(s.verified for s in all_stats),
         "final_lost": sum(s.final_lost for s in all_stats),
@@ -503,7 +564,9 @@ def main(argv):
         "error_kinds": kinds,
     }
     print("RESULT " + json.dumps(result, sort_keys=True))
-    bad = result["errors"] + result["lost"] + result["corrupt"] + result["final_lost"] + result["final_corrupt"]
+    # "landed" (a write that timed out but reached Riak) is not a failure; errors are reported on their own.
+    bad = (result["errors"] + result["lost"] + result["corrupt"] + result["stale"] + result["ahead"]
+           + result["final_lost"] + result["final_corrupt"])
     return 0 if bad == 0 and puts > 0 else 2
 
 
