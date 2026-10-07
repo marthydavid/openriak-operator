@@ -6,7 +6,7 @@ a constant load on one TLS cluster while failures are injected one after another
 [`hack/dr-gameday.sh`](https://github.com/marthydavid/openriak-operator/blob/test/dr-gameday/hack/dr-gameday.sh),
 the load and the read-back are the [soak harness](scaling.md#soak-test-a-constant-load-for-hours).
 
-**Status: in progress.** This page is updated as each fault finishes.
+**Status: in progress.** This page is updated as each fault finishes. One finding so far (D5, below).
 
 ## Setup
 
@@ -36,7 +36,7 @@ same 15 s.
 |---|---|---|---|---|
 | D1 | delete one Riak pod (`soak-1`) | 16 s after the 25 s pause | one 60 s window at 192 of 200 ops/s with 4.06 % errors, back to 200 ops/s and 0 % in the next; p99 stayed at 46 ms | recovered |
 | D7 | delete two pods at once (`soak-1`, `soak-2`) | 31 s after the 25 s pause | the cluster showed 1 of 3 nodes for a sample; two windows at 172 and 170 of 200 ops/s with 13.6 % and 14.0 % errors; p99 of the operations that succeeded stayed at 45 ms | recovered, no restart or OOM elsewhere |
-| D5 | delete one node's volume and pod | pending | pending | pending |
+| D5 | delete one node's volume (`data-soak-2`) and pod | `Ready` 15 s after the 25 s pause, **but the node did not rejoin the ring** (see below) | one window at 190 of 200 ops/s with 4.22 % errors, then back to 198 | **operator reports Ready while Riak is split: finding 1** |
 | D3 | isolate one pod with a NetworkPolicy for 3 minutes | pending | pending | pending |
 | Read-back and `-verify-only` | every key read back after the load; Riak compared with the CRs | pending | pending | pending |
 
@@ -49,3 +49,25 @@ same 15 s.
   succeeded, and the cluster was `Ready` with three running pods 56 s after the pods were deleted. The client
   windows are 60 s long, so one outage of under a minute shows in two consecutive windows. Whether any
   acknowledged write was lost is only known after the read-back at the end of the run.
+- **D5**: the pod and a fresh, empty volume came back within a minute and the operator reported the cluster
+  `Ready`. Checked directly in Riak about 80 s after the new volume was created:
+
+  | | What Riak says |
+  |---|---|
+  | `riak-admin member-status` on `soak-0` | 3 valid members, `soak-2` owns 33.6 % |
+  | `riak-admin member-status` on **`soak-2`** | **1 member, itself, owning 100 %** |
+  | `riak-admin transfers` on `soak-0`, `soak-1` | waiting to hand off 43 and 23 partitions, no active transfer |
+  | `/var/lib/riak/bitcask` | `soak-0` 2.8 GB, `soak-1` 2.0 GB, **`soak-2` 0.4 GB** |
+
+## Findings
+
+1. **A node that comes back with an empty volume is never rejoined, and the cluster still reports `Ready`.**
+   The operator joins a node only when it is a standalone ring whose name is *not* in the seed's ring
+   (`internal/riak/manager.go`, `ReconcileMembership`), and decides `Ready` from the seed's view alone. After
+   a data loss the node has the same name (it is a StatefulSet), so the seed lists it as a valid member and the
+   operator skips it, while the node itself runs a one-member ring that owns every partition. The other nodes
+   keep hinted data for it that cannot be handed off. The read-back at the end of this run shows whether any
+   acknowledged write was lost because of it. Needs an issue: either detect the divergence (compare each node's
+   own `member-status` with the seed's, report not `Ready`) and repair it (for example `riak-admin cluster
+   replace`/force-replace), or document the manual procedure.
+
