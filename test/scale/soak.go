@@ -79,6 +79,7 @@ type soakOpts struct {
 	podAntiAffinity string
 	clientCPU       string  // CPU request of each load client (no CPU limit)
 	maxDisk         float64 // stop the clients when a data volume is fuller than this percent (0 = never)
+	artifacts       string  // directory for the time series and logs of the run (empty = none)
 }
 
 func (s soakOpts) perClientRate() float64 { return float64(s.rate) / float64(s.users) }
@@ -283,7 +284,12 @@ type soakState struct {
 	actionKind string
 	stalled    bool
 	aborted    string // set when the load was stopped early
-	stalls     []string
+
+	art         *artifacts
+	pods        []corev1.Pod
+	lastWindows map[string]windowRec
+	lastTop     map[string]int64
+	stalls      []string
 }
 
 type soakEvent struct {
@@ -422,11 +428,13 @@ func (st *soakState) sampleOnce(ctx context.Context, c client.Client, o opts) (s
 		"--containers", "--no-headers")
 	s := soakSample{At: time.Now(), ClusterReady: soakReady(cl), AllNodesUp: nodesUp(pods.Items)}
 	s.MemPct = st.observePods(pods.Items, memLimit(cl), top)
+	st.pods, st.lastTop = pods.Items, parseTopMemory(top, "riak")
 	s.OOMKills, s.Restarts = st.oomKills, st.restarts
 
 	logs, _ := kubectlOut(60*time.Second, "logs", "-n", o.namespace, "-l", "app="+soakApp, "--tail=2", "--prefix",
 		"--max-log-requests="+strconv.Itoa(o.soak.users+5))
-	rate, errRate, p99, n := aggregateWindows(parseLatestWindows(logs), s.At, 3*o.soak.window)
+	st.lastWindows = parseLatestWindows(logs)
+	rate, errRate, p99, n := aggregateWindows(st.lastWindows, s.At, 3*o.soak.window)
 	if n > 0 {
 		s.Rate, s.ErrRate, s.P99 = rate, errRate, p99
 	}
@@ -526,6 +534,7 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 				st.rateN++
 			}
 			fmt.Println(st.tickLine(o, sample, cl))
+			st.record(o, sample, cl)
 			st.checkStall(sample, s.actionTimeout)
 			if diskTooFull(sample.DiskPct, s.maxDisk) {
 				return st.abortForDisk(ctx, c, o, sample.DiskPct)
@@ -559,6 +568,28 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 			return fmt.Errorf("the clients did not finish within %s", s.duration+70*time.Minute)
 		}
 		time.Sleep(s.check)
+	}
+}
+
+// record saves this sample (and once a minute every exporter's series and the node usage).
+func (st *soakState) record(o opts, s soakSample, cl *riakv1.RiakCluster) {
+	if st.art == nil {
+		return
+	}
+	st.art.writeSample(artifactRow{
+		Time: s.At, ElapsedS: s.At.Sub(st.started).Seconds(), Sample: s, Nodes: cl.Status.ReadyNodes,
+		MemLimit: memString(cl), PodMemByte: st.lastTop, PodDiskGiB: st.diskPods, Clients: st.lastWindows,
+	})
+	if st.tick%metricsEveryTicks(o.soak.check) != 0 {
+		return
+	}
+	for _, p := range st.pods {
+		if body, err := scrapeMetrics(o.namespace, p.Name); err == nil {
+			st.art.writeMetrics(s.At, p.Name, parseMetrics(body))
+		}
+	}
+	if top, err := kubectlOut(30*time.Second, "top", "nodes", "--no-headers"); err == nil {
+		st.art.writeNodes(s.At, top)
 	}
 }
 
@@ -682,6 +713,12 @@ func runSoak(ctx context.Context, c client.Client, o opts) error {
 	}
 	st := &soakState{seenOOM: map[string]bool{}, events: map[string]*soakEvent{}, seenEvent: map[string]bool{},
 		diskPods: map[string]float64{}, started: time.Now()}
+	art, err := newArtifacts(s.artifacts)
+	if err != nil {
+		return fmt.Errorf("-soak-artifacts: %w", err)
+	}
+	st.art = art
+	defer art.close()
 	for i := 0; i < s.users; i++ {
 		if err := c.Create(ctx, soakJob(o, i)); err != nil && !apiAlreadyExists(err) {
 			return fmt.Errorf("create client %d: %w", i, err)
@@ -721,6 +758,8 @@ func finishSoak(ctx context.Context, c client.Client, o opts, st *soakState, mon
 	_ = c.List(ctx, pods, client.InNamespace(o.namespace), client.MatchingLabels{"app": "riak", "cluster": soakCluster})
 
 	printSoakReport(o, st, sum, results, cl)
+	// Keep the logs now, while the pods still exist: the namespace is deleted when the run ends.
+	st.art.collectLogs(o, pods.Items)
 	problems = append(problems, soakVerdict(o, st, sum, len(results), cl, pods.Items)...)
 
 	if err := verifyEventually(ctx, c, o, "after the soak test"); err != nil {
@@ -729,6 +768,11 @@ func finishSoak(ctx context.Context, c client.Client, o opts, st *soakState, mon
 	if err := verifyOperatorHealthy(ctx, c, o); err != nil {
 		problems = append(problems, err.Error())
 	}
+	st.art.writeSummary(soakSummary{
+		Started: st.started, Ended: time.Now(), Config: soakConfig(o.soak), Results: sum, Problems: problems,
+		Timeline: st.timeline, Events: st.events, OOMKills: st.oomKills, Restarts: st.restarts,
+		PeakMemPct: st.peak.mem, PeakDiskPct: st.peak.disk, PeakP99: st.peak.p99, Passed: len(problems) == 0,
+	})
 	if len(problems) > 0 {
 		for _, p := range problems {
 			fmt.Println("  SOAK:", p)
