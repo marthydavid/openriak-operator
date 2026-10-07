@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -22,7 +23,7 @@ func soakTestOpts() opts {
 			readRatio: 0.5, valueSize: 16384, nVal: 3, pr: 2, pw: 2, storage: "300Gi", memory: "4Gi",
 			maxMemory: "16Gi", cpu: "2", replicas: 3, maxReplicas: 5, check: 30 * time.Second, window: time.Minute,
 			cooldown: 20 * time.Minute, p99Limit: 1000, maxErrRate: 0.005, minRateRatio: 0.9,
-			actionTimeout: 20 * time.Minute, memPressure: 0.85,
+			actionTimeout: 20 * time.Minute, memPressure: 0.85, clientCPU: "250m", maxDisk: 90,
 		},
 	}
 }
@@ -38,6 +39,9 @@ func TestSoakCRs(t *testing.T) {
 	}
 	if got := cluster.Spec.Resources.Limits.Memory().String(); got != "4Gi" {
 		t.Fatalf("memory limit %s: a limit is what makes an OOM kill possible and observable", got)
+	}
+	if _, limited := cluster.Spec.Resources.Limits[corev1.ResourceCPU]; limited {
+		t.Fatal("Riak must have no CPU limit: it should use as much CPU as it needs")
 	}
 	req := cluster.Spec.Resources.Requests
 	if req.Memory().String() != "4Gi" || req.Cpu().String() != "2" {
@@ -155,6 +159,8 @@ func TestValidateSoak(t *testing.T) {
 		"rate too low":       func(s *soakOpts) { s.rate = 1 },
 		"no users":           func(s *soakOpts) { s.users = 0 },
 		"bad storage":        func(s *soakOpts) { s.storage = "x" },
+		"bad anti-affinity":  func(s *soakOpts) { s.podAntiAffinity = "Sometimes" },
+		"bad client cpu":     func(s *soakOpts) { s.clientCPU = "lots" },
 		"pressure zero":      func(s *soakOpts) { s.memPressure = 0 },
 		"pressure above one": func(s *soakOpts) { s.memPressure = 1.5 },
 		"nval zero":          func(s *soakOpts) { s.nVal = 0 },
@@ -321,14 +327,42 @@ func TestCapSize(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(certScheme(t)).WithObjects(nodes...).Build()
 	st := &soakState{}
-	if got := st.capSize(ctx, c, 5); got != 3 {
+	if got := st.capSize(ctx, c, 5, ""); got != 3 {
 		t.Fatalf("5 wanted on 3 nodes must be capped to 3, got %d", got)
 	}
-	if got := st.capSize(ctx, c, 3); got != 3 {
+	if got := st.capSize(ctx, c, 3, riakv1.PodAntiAffinityRequired); got != 3 {
 		t.Fatalf("got %d", got)
 	}
-	if got := st.capSize(ctx, c, 2); got != 2 {
+	if got := st.capSize(ctx, c, 2, ""); got != 2 {
 		t.Fatalf("a lower wish stays, got %d", got)
+	}
+	for _, mode := range []string{riakv1.PodAntiAffinityPreferred, riakv1.PodAntiAffinityNone} {
+		if got := st.capSize(ctx, c, 5, mode); got != 5 {
+			t.Fatalf("with %s Riak pods may share a node, so 3 nodes do not cap the size: got %d", mode, got)
+		}
+	}
+}
+
+func TestSoakJob_noCPULimitAndConfigurableRequest(t *testing.T) {
+	o := soakTestOpts()
+	o.soak.clientCPU = "2"
+	c := soakJob(o, 0).Spec.Template.Spec.Containers[0].Resources
+	if c.Requests.Cpu().String() != "2" {
+		t.Fatalf("client cpu request %v", c.Requests.Cpu())
+	}
+	if _, limited := c.Limits[corev1.ResourceCPU]; limited {
+		t.Fatal("a CPU limit would throttle the load generator")
+	}
+}
+
+func TestSoakCRs_antiAffinityMode(t *testing.T) {
+	o := soakTestOpts()
+	if cluster, _, _ := soakCRs(o); cluster.Spec.PodAntiAffinity != "" {
+		t.Fatalf("unset must leave the operator's default, got %q", cluster.Spec.PodAntiAffinity)
+	}
+	o.soak.podAntiAffinity = riakv1.PodAntiAffinityPreferred
+	if cluster, _, _ := soakCRs(o); cluster.Spec.PodAntiAffinity != riakv1.PodAntiAffinityPreferred {
+		t.Fatalf("got %q", cluster.Spec.PodAntiAffinity)
 	}
 }
 
@@ -341,5 +375,40 @@ func TestSoakVerdict_reportsStalledActions(t *testing.T) {
 	bad := strings.Join(soakVerdict(o, st, good, 10, ready, nil), "\n")
 	if !strings.Contains(bad, "scale-out action left the cluster not ready") {
 		t.Fatalf("a stalled action must fail the run: %q", bad)
+	}
+}
+
+func TestDiskTooFull(t *testing.T) {
+	for _, tc := range []struct {
+		pct, limit float64
+		want       bool
+	}{{50, 90, false}, {89.9, 90, false}, {90, 90, true}, {99, 90, true}, {99, 0, false}, {0, 90, false}} {
+		if got := diskTooFull(tc.pct, tc.limit); got != tc.want {
+			t.Errorf("diskTooFull(%v, %v) = %v, want %v", tc.pct, tc.limit, got, tc.want)
+		}
+	}
+}
+
+func TestAbortForDisk_deletesTheClientsAndExplains(t *testing.T) {
+	ctx := context.Background()
+	o := soakTestOpts()
+	o.soak.users = 3
+	var objs []client.Object
+	for i := 0; i < 3; i++ {
+		objs = append(objs, soakJob(o, i))
+	}
+	c := fake.NewClientBuilder().WithScheme(certScheme(t)).WithObjects(objs...).Build()
+	st := &soakState{started: time.Now()}
+
+	err := st.abortForDisk(ctx, c, o, 93.4)
+	if err == nil || !strings.Contains(err.Error(), "93.4%") || st.aborted == "" {
+		t.Fatalf("err=%v aborted=%q", err, st.aborted)
+	}
+	jobs := &batchv1.JobList{}
+	if lerr := c.List(ctx, jobs); lerr != nil || len(jobs.Items) != 0 {
+		t.Fatalf("all clients must be stopped: %v %d", lerr, len(jobs.Items))
+	}
+	if len(st.timeline) != 1 || !strings.Contains(st.timeline[0], "ABORT") {
+		t.Fatalf("timeline %v", st.timeline)
 	}
 }
