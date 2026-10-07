@@ -6,7 +6,7 @@ a constant load on one TLS cluster while failures are injected one after another
 [`hack/dr-gameday.sh`](https://github.com/marthydavid/openriak-operator/blob/test/dr-gameday/hack/dr-gameday.sh),
 the load and the read-back are the [soak harness](scaling.md#soak-test-a-constant-load-for-hours).
 
-**Status: in progress.** This page is updated as each fault finishes. One finding so far (D5, below).
+**Status: in progress.** This page is updated as each fault finishes. Findings so far: D5 (finding 1) and D3 (finding 2), below.
 
 ## Setup
 
@@ -37,7 +37,7 @@ same 15 s.
 | D1 | delete one Riak pod (`soak-1`) | 16 s after the 25 s pause | one 60 s window at 192 of 200 ops/s with 4.06 % errors, back to 200 ops/s and 0 % in the next; p99 stayed at 46 ms | recovered |
 | D7 | delete two pods at once (`soak-1`, `soak-2`) | 31 s after the 25 s pause | the cluster showed 1 of 3 nodes for a sample; two windows at 172 and 170 of 200 ops/s with 13.6 % and 14.0 % errors; p99 of the operations that succeeded stayed at 45 ms | recovered, no restart or OOM elsewhere |
 | D5 | delete one node's volume (`data-soak-2`) and pod | `Ready` 15 s after the 25 s pause, **but the node did not rejoin the ring** (see below) | one window at 190 of 200 ops/s with 4.22 % errors, then back to 198 | **operator reports Ready while Riak is split: finding 1** |
-| D3 | isolate one pod with a NetworkPolicy for 3 minutes | pending | pending | pending |
+| D3 | isolate `soak-1` with a NetworkPolicy (deny all ingress and egress) for 3 minutes, then lift it | `Ready` again on the first check after the policy was removed | no effect: 198 to 199 ops/s, 0 % errors, p99 44 ms throughout | **inconclusive: the isolation did not isolate** (finding 2) |
 | Read-back and `-verify-only` | every key read back after the load; Riak compared with the CRs | pending | pending | pending |
 
 ## Notes
@@ -70,4 +70,19 @@ same 15 s.
    acknowledged write was lost because of it. Needs an issue: either detect the divergence (compare each node's
    own `member-status` with the seed's, report not `Ready`) and repair it (for example `riak-admin cluster
    replace`/force-replace), or document the manual procedure.
+2. **A NetworkPolicy is not a network partition on OVN-Kubernetes (hypothesis, not verified).** With `soak-1`
+   isolated in both directions for 3 minutes the clients saw no errors and no latency change, the kubelet's
+   readiness probes of `soak-1` never failed (probes are exempt from NetworkPolicy), and the cluster status
+   flipped to not `Ready` for two samples only, for a reason that was not captured. The likeliest explanation
+   is that the policy stops *new* connections but leaves *established* ones running, and the Riak peer
+   (Erlang distribution) and client protobuf connections are long-lived. This run therefore says nothing
+   about how Riak behaves when one node is partitioned. A real partition needs a fault that also drops
+   established flows (for example Chaos Mesh `NetworkChaos`, which is what [#98](https://github.com/marthydavid/openriak-operator/issues/98)
+   proposes for this). A short follow-up test can confirm the explanation: apply the same policy and
+   compare an existing connection with a new one from `soak-0` to `soak-1:8087`.
+
+## Still to come
+
+The load runs until about 23:38; then the harness reads every key back, and `-verify-only` compares Riak with
+the CRs. Those two results say whether D5 lost acknowledged writes, and are added below.
 
