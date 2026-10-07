@@ -1,5 +1,81 @@
 # Release notes
 
+## Operator 1.0.0 / chart 1.0.0
+
+The first stable release. It adds client certificates from an **external CA**, lets a cluster have more Riak
+nodes than Kubernetes nodes, and documents the load and soak tests that the operator has been run against.
+
+!!! warning "First upgrade from an earlier chart: adopt the CRDs"
+    From this release the chart renders the CRDs from its templates, so `helm upgrade` updates them (Helm never
+    upgraded the old `crds/` directory). CRDs installed by an earlier chart are not owned by the Helm release, so
+    the first upgrade must adopt them:
+
+    ```bash
+    # Helm 3.17 or later
+    helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator --version 1.0.0 \
+      -n openriak-system --take-ownership
+    ```
+
+    On older Helm 3, label and annotate the three CRDs for the release first; see the
+    [chart README](https://github.com/marthydavid/openriak-operator/blob/main/charts/openriak-operator/README.md#upgrading-from-an-earlier-chart).
+    Two CRDs changed in this release (`RiakCluster` and `RiakUser`), so the upgrade applies new schemas. If you
+    manage CRDs yourself, set `crds.install=false` and apply `config/crd/bases` from the `v1.0.0` tag first.
+
+    The chart also gains RBAC for Secrets (see below). **Existing clusters are not restarted by the upgrade**:
+    `spec.podAntiAffinity` defaults to `Required` (today's behaviour) and TLS clusters without
+    `additionalClientCAs` keep the same certificate volume. Setting either one later rolls the pods once.
+
+### New
+
+- **CRDs ship in the chart's templates** ([#97](https://github.com/marthydavid/openriak-operator/pull/97),
+  [#96](https://github.com/marthydavid/openriak-operator/issues/96)). `helm upgrade` now updates the CRDs, and
+  `helm uninstall` leaves them (and every Riak resource) in place through `helm.sh/resource-policy: keep`.
+  Values `crds.install` (default `true`) and `crds.keep` (default `true`); with `crds.keep=false` an uninstall
+  deletes the CRDs and everything built on them. CI checks that the chart copy matches `config/crd/bases`.
+- **Client certificates from an external CA** ([#70](https://github.com/marthydavid/openriak-operator/pull/70),
+  [#69](https://github.com/marthydavid/openriak-operator/issues/69)). `spec.tls.additionalClientCAs` lists extra
+  CA certificates (a Secret or ConfigMap key) that Riak trusts next to the cluster CA; the operator merges them
+  into `<cluster>-tls-trust` and reports problems in `status.tlsStatus.trustBundleError`. A `RiakUser`'s
+  `certificateRef` now takes exactly one of `issuerRef` (cert-manager issues the certificate, as before) or
+  `externalSecretName` (you bring the certificate; the operator checks that the common name matches the
+  username, the certificate is currently valid, allows client authentication and chains to a trusted CA). New
+  RBAC: `get` on Secrets, and `create`/`update` for the trust bundle. Restart the Riak pods after changing the
+  trusted CAs: whether a running node re-reads `ca.crt` was not verified. Guide: [mTLS](mtls.md).
+- **`spec.podAntiAffinity`** ([#92](https://github.com/marthydavid/openriak-operator/pull/92),
+  [#91](https://github.com/marthydavid/openriak-operator/issues/91)): `Required` (default), `Preferred` or
+  `None`, so a 5-node cluster can run on a 3-node Kubernetes cluster. With `Preferred` or `None`, losing one
+  Kubernetes node can take out more than one replica: for test and small clusters, not production.
+- **Soak test** (`test/scale -soak`, `make soak-test`): holds a constant load on one TLS cluster for hours,
+  watches for OOM kills, restarts, memory, disk and client throughput, scales memory or nodes when needed, and
+  saves its time series for charts. See [Soak test results](soak-test-results.md).
+- **Basho Bench against an mTLS cluster**: a published image (`ghcr.io/marthydavid/basho-bench`), the TLS fix
+  its protobuf driver needs, and a run shaped like the soak test. See [Basho Bench](basho-bench.md).
+
+### Changes you may notice
+
+- Go 1.25, controller-runtime v0.23.3, Kubernetes client libraries 0.35.9 (OpenShift/OKD 4.22 runs
+  Kubernetes 1.35, 4.21 runs 1.34), golangci-lint v2.
+- The operator and Riak 3.0 fixes of 0.0.12 are included (the `3.0.16` image has a `riak-admin` wrapper).
+
+### Tests
+
+What this release was checked with, and what it was not.
+
+| Test | Result |
+|---|---|
+| Unit and envtest (real etcd and kube-apiserver 1.35) | 95 controller specs and 160 further Go test cases pass |
+| Coverage | `internal/controller` 91.8 %, `internal/riak` 97.2 % of statements (target 85 %) |
+| Lifecycle | scale up 3 to 5 nodes (only the new nodes are joined, one plan and commit), bucket add, update and delete, user add and delete |
+| Static checks | golangci-lint v2.14.0 0 issues, `helm lint` clean |
+| e2e on kind | passes in CI on every pull request |
+| Scale test on OKD 4.22, Riak `3.0`, `3.2` and `3.4` | a 3-node TLS cluster with 3 users and 3 buckets is Ready in 1m37s to 1m41s, users and buckets in under 2 minutes, and Riak holds exactly what the CRs declare on every node (51 facts); no operator restarts |
+| Soak, 4 hours on OKD | 600 ops/s of 128 KiB objects, 10 mTLS users: average 595.8 ops/s (99.3 % of target), 8,579,991 operations, 200 read timeouts (0.0023 %), no OOM kill, no restart, no lost or corrupt value. [Details](soak-test-results.md) |
+| Basho Bench, 28 minutes, soak constraints | mTLS authentication works; the run reached 175 ops/s of the 600 target (29 %) with 0.52 % timeouts and no restart. The cause of the lower throughput is not established. [Details](basho-bench.md) |
+
+Not covered: AKS and OpenShift 4.21 were not run, so their support rests on the Kubernetes client-library
+version, not on a test. The scale test used the operator build of the previous release candidate, not the
+`1.0.0` image itself. The soak test ran on Riak 3.2.6 only.
+
 ## Operator 0.0.12 / chart 0.1.10
 
 Moves the operator to **Go 1.25, controller-runtime v0.23 and Kubernetes client libraries 0.35**, so it matches

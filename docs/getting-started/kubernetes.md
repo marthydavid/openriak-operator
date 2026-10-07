@@ -47,7 +47,7 @@ kubectl get crd | grep riak.openriak.io
 
 ```bash
 make install                                   # CRDs
-make deploy IMG=ghcr.io/marthydavid/openriak-operator:0.0.12
+make deploy IMG=ghcr.io/marthydavid/openriak-operator:1.0.0
 ```
 
 ## Next

@@ -36,7 +36,7 @@ Find every occurrence of the previous versions rather than trusting a list:
 grep -rIn "<old-operator>\|<old-chart>" . --exclude-dir=.git --exclude=go.sum
 ```
 
-Known places (the previous release commit touched all of these): `charts/openriak-operator/Chart.yaml` (`version`, `appVersion`), `README.md`, `docs/examples.md`, `docs/getting-started/kubernetes.md`, `examples/*.yaml`, any `make deploy IMG=…:<ver>` snippet. Do not edit old entries in `docs/release-notes.md` or `go.sum`.
+Known places (the previous release commit touched all of these): `charts/openriak-operator/Chart.yaml` (`version`, `appVersion`), `charts/openriak-operator/README.md` (version table, `--version`, the CRD URLs' tag), `README.md`, `docs/examples.md`, `docs/getting-started/kubernetes.md`, `examples/*.yaml`, any `make deploy IMG=…:<ver>` snippet. Do not edit old entries in `docs/release-notes.md` or `go.sum`.
 
 ## 4. Release notes
 

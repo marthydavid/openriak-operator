@@ -6,8 +6,8 @@ TLS (cert-manager) and mTLS client-certificate users (cert-manager or external C
 
 | | |
 |---|---|
-| Chart version | see `Chart.yaml` `version` |
-| Operator image | `ghcr.io/marthydavid/openriak-operator`, tag defaults to `appVersion` |
+| Chart version | `1.0.0` (`Chart.yaml` `version`) |
+| Operator image | `ghcr.io/marthydavid/openriak-operator:1.0.0` (tag defaults to `appVersion`) |
 | Default Riak image | `ghcr.io/marthydavid/riak:3.2.6` (3.0, 3.2 and 3.4 are published) |
 
 ## Prerequisites
@@ -25,7 +25,7 @@ TLS (cert-manager) and mTLS client-certificate users (cert-manager or external C
 From the OCI registry (published by the chart release workflow):
 
 ```bash
-helm install openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator \
+helm install openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator --version 1.0.0 \
   --namespace openriak-system --create-namespace
 ```
 
@@ -49,7 +49,7 @@ Then create a cluster, for example
 ## Upgrade
 
 ```bash
-helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator \
+helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator --version 1.0.0 \
   --namespace openriak-system
 ```
 
@@ -66,7 +66,7 @@ with `exists and cannot be imported into the current release`. Pick one:
 
 ```bash
 # Helm 3.17 or later
-helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator \
+helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator --version 1.0.0 \
   --namespace openriak-system --take-ownership
 ```
 
