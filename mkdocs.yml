@@ -56,5 +56,6 @@ nav:
       - Scaling: scaling.md
       - Scale test results: scale-test-results.md
       - Soak test results: soak-test-results.md
+      - Basho Bench: basho-bench.md
       - Test environment: test-environment.md
       - Troubleshooting: troubleshooting.md

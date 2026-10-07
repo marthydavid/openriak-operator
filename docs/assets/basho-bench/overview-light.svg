@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 224" width="860" height="224" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="Soak run at a glance">
+<title>Soak run at a glance</title>
+<text x="70" y="22" fill="#1f2328" font-size="15" font-weight="600">Soak run at a glance</text>
+<text x="70" y="39" fill="#656d76" font-size="11.5">600 ops/s, 128 KiB objects, 10 users, 10 buckets, n_val 3, pr/pw 2/2, 3 nodes</text>
+<rect x="16" y="52" width="198" height="76" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="28" y="72" fill="#656d76" font-size="11.5">throughput</text>
+<text x="28" y="98" fill="#1f2328" font-size="22" font-weight="700">175 ops/s</text>
+<text x="28" y="116" fill="#656d76" font-size="10.5">29% of target on average</text>
+<rect x="226" y="52" width="198" height="76" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="238" y="72" fill="#656d76" font-size="11.5">errors</text>
+<text x="238" y="98" fill="#1f2328" font-size="22" font-weight="700">0.521%</text>
+<text x="238" y="116" fill="#656d76" font-size="10.5">1563 failed of 298,415 operations</text>
+<rect x="436" y="52" width="198" height="76" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="448" y="72" fill="#656d76" font-size="11.5">p99 latency</text>
+<text x="448" y="98" fill="#1f2328" font-size="22" font-weight="700">1715 ms</text>
+<text x="448" y="116" fill="#656d76" font-size="10.5">median sample; worst 7743 ms</text>
+<rect x="646" y="52" width="198" height="76" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="658" y="72" fill="#656d76" font-size="11.5">integrity</text>
+<text x="658" y="98" fill="#1f2328" font-size="22" font-weight="700">not checked</text>
+<text x="658" y="116" fill="#656d76" font-size="10.5">load tool does not read back</text>
+<rect x="16" y="140" width="198" height="76" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="28" y="160" fill="#656d76" font-size="11.5">Riak memory</text>
+<text x="28" y="186" fill="#1f2328" font-size="22" font-weight="700">3.7 GiB</text>
+<text x="28" y="204" fill="#656d76" font-size="10.5">peak; limit 16 GiB</text>
+<rect x="226" y="140" width="198" height="76" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="238" y="160" fill="#656d76" font-size="11.5">disk</text>
+<text x="238" y="186" fill="#1f2328" font-size="22" font-weight="700">39%</text>
+<text x="238" y="204" fill="#656d76" font-size="10.5">peak of the 300 GiB volume</text>
+<rect x="436" y="140" width="198" height="76" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="448" y="160" fill="#656d76" font-size="11.5">OOM kills</text>
+<text x="448" y="186" fill="#1f2328" font-size="22" font-weight="700">0</text>
+<text x="448" y="204" fill="#656d76" font-size="10.5">0 container restarts</text>
+<rect x="646" y="140" width="198" height="76" rx="8" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="658" y="160" fill="#656d76" font-size="11.5">verdict</text>
+<text x="658" y="186" fill="#cf222e" font-size="22" font-weight="700">FAIL</text>
+<text x="658" y="204" fill="#656d76" font-size="10.5">0 scaling actions</text>
+</svg>
