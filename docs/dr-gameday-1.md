@@ -39,7 +39,7 @@ same 15 s.
 |---|---|---|---|---|
 | D1 | delete one Riak pod (`soak-1`) | 16 s after the 25 s pause | one 60 s window at 192 of 200 ops/s with 4.06 % errors, back to 200 ops/s and 0 % in the next; p99 stayed at 46 ms | recovered |
 | D7 | delete two pods at once (`soak-1`, `soak-2`) | 31 s after the 25 s pause | the cluster showed 1 of 3 nodes for a sample; two windows at 172 and 170 of 200 ops/s with 13.6 % and 14.0 % errors; p99 of the operations that succeeded stayed at 45 ms | recovered, no restart or OOM elsewhere |
-| D5 | delete one node's volume (`data-soak-2`) and pod | `Ready` 15 s after the 25 s pause, **but the node did not rejoin the ring** (see below) | one window at 190 of 200 ops/s with 4.22 % errors, then back to 198 | **operator reports Ready while Riak is split: finding 1** |
+| D5 | delete one node's volume (`data-soak-2`) and pod | `Ready` 15 s after the 25 s pause, **but the node did not rejoin the ring** (see below) | two windows at 190 and 189 of 200 ops/s with 4.22 % and 4.67 % errors (the second after the pod was already back and the operator said `Ready`), then 198 | **operator reports Ready while Riak is split: finding 1** |
 | D3 | isolate `soak-1` with a NetworkPolicy (deny all ingress and egress) for 3 minutes, then lift it | `Ready` again on the first check after the policy was removed | no effect: 198 to 199 ops/s, 0 % errors, p99 44 ms throughout | **inconclusive: the isolation did not isolate** (finding 2) |
 | Read-back and `-verify-only` | every key read back after the load; Riak compared with the CRs | pending | pending | pending |
 
