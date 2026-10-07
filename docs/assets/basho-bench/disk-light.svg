@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 330" width="860" height="330" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="Data volume use">
+<title>Data volume use</title>
+<text x="70" y="22" fill="#1f2328" font-size="15" font-weight="600">Data volume use</text>
+<text x="70" y="39" fill="#656d76" font-size="11.5">bitcask keeps overwritten data until it merges; the 300 GiB volume is never close to full</text>
+<line x1="70" x2="88" y1="48" y2="48" stroke="#0969da" stroke-width="2.4"/>
+<text x="93" y="52" fill="#656d76" font-size="11">bsoak-0</text>
+<line x1="150" x2="168" y1="48" y2="48" stroke="#cf222e" stroke-width="2.4"/>
+<text x="173" y="52" fill="#656d76" font-size="11">bsoak-1</text>
+<line x1="230" x2="248" y1="48" y2="48" stroke="#1a7f37" stroke-width="2.4"/>
+<text x="253" y="52" fill="#656d76" font-size="11">bsoak-2</text>
+<text x="453" y="322" text-anchor="middle" fill="#656d76" font-size="11.5">hours into the run</text>
+<text transform="translate(16 169) rotate(-90)" text-anchor="middle" fill="#656d76" font-size="11.5">GiB used</text>
+<line x1="70" x2="836" y1="280.0" y2="280.0" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="284.0" text-anchor="end" fill="#656d76" font-size="11">0</text>
+<line x1="70" x2="836" y1="204.0" y2="204.0" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="208.0" text-anchor="end" fill="#656d76" font-size="11">50</text>
+<line x1="70" x2="836" y1="128.0" y2="128.0" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="132.0" text-anchor="end" fill="#656d76" font-size="11">100</text>
+<line x1="70.0" x2="70.0" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="70.0" y="296" text-anchor="middle" fill="#656d76" font-size="11">0</text>
+<line x1="223.2" x2="223.2" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="223.2" y="296" text-anchor="middle" fill="#656d76" font-size="11">0.2</text>
+<line x1="376.4" x2="376.4" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="376.4" y="296" text-anchor="middle" fill="#656d76" font-size="11">0.4</text>
+<line x1="529.6" x2="529.6" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="529.6" y="296" text-anchor="middle" fill="#656d76" font-size="11">0.6</text>
+<line x1="682.8" x2="682.8" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="682.8" y="296" text-anchor="middle" fill="#656d76" font-size="11">0.8</text>
+<line x1="836.0" x2="836.0" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="836.0" y="296" text-anchor="middle" fill="#656d76" font-size="11">1</text>
+<line x1="70" x2="836" y1="280" y2="280" stroke="#656d76"/>
+<polyline points="98.9,211.2 105.3,211.2 111.7,211.2 118.1,211.2 124.5,211.2 130.8,206.6 137.2,200.5 143.6,186.8 150.0,173.1 156.4,156.4 162.8,147.3 169.1,147.3 175.5,147.3 181.9,147.3 188.3,147.3 194.7,147.3 201.1,147.3 207.4,147.3 213.8,147.3 220.2,144.3 226.6,144.3 233.0,144.3 239.4,144.3 245.8,144.3 252.1,144.2 258.5,143.9 264.9,143.5 271.3,139.5 277.7,130.5 284.1,127.5 290.4,123.2 296.8,118.3 303.2,117.1 309.6,121.3 316.0,119.3 322.4,124.4 328.7,129.2 335.1,128.3 341.5,124.6 347.9,125.5 354.3,133.5 360.7,138.8 367.1,148.1 373.4,152.7 379.8,161.4 386.2,169.4 392.6,170.7 399.0,172.8" fill="none" stroke="#0969da" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="98.9,225.4 105.3,225.4 111.7,220.9 118.1,201.8 124.5,201.9 130.8,199.6 137.2,197.3 143.6,197.3 150.0,192.7 156.4,186.6 162.8,186.7 169.1,186.7 175.5,171.4 181.9,153.1 188.3,142.6 194.7,139.5 201.1,138.0 207.4,136.5 213.8,136.5 220.2,136.5 226.6,136.5 233.0,136.5 239.4,136.5 245.8,136.5 252.1,136.4 258.5,134.9 264.9,133.7 271.3,126.3 277.7,128.0 284.1,126.6 290.4,124.1 296.8,121.4 303.2,120.8 309.6,115.6 316.0,110.6 322.4,105.3 328.7,105.9 335.1,122.5 341.5,130.1 347.9,140.1 354.3,142.7 360.7,143.1 367.1,145.7 373.4,156.4 379.8,155.5 386.2,161.6 392.6,176.7 399.0,178.4" fill="none" stroke="#cf222e" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="98.9,225.2 105.3,225.2 111.7,215.3 118.1,201.6 124.5,199.3 130.8,195.5 137.2,195.5 143.6,195.5 150.0,195.5 156.4,189.5 162.8,186.4 169.1,184.9 175.5,165.1 181.9,149.9 188.3,136.2 194.7,134.7 201.1,134.7 207.4,133.2 213.8,133.2 220.2,133.2 226.6,133.2 233.0,133.2 239.4,133.2 245.8,133.2 252.1,133.2 258.5,133.2 264.9,131.7 271.3,125.8 277.7,127.4 284.1,125.7 290.4,122.4 296.8,118.5 303.2,117.1 309.6,111.5 316.0,110.2 322.4,111.0 328.7,104.7 335.1,102.4 341.5,103.6 347.9,126.9 354.3,135.0 360.7,141.1 367.1,153.9 373.4,158.4 379.8,156.8 386.2,154.4 392.6,152.2 399.0,161.0" fill="none" stroke="#1a7f37" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,38 @@
+# Builds OpenRiak/basho_bench (branch openriak-3.2) on OpenShift/OKD and pushes it to the internal registry.
+# The sed inserts application:ensure_all_started(ssl) into the protobuf driver; without it TLS connections
+# fail with {tcp,ssl_not_started} (silently with auto_reconnect). See docs/basho-bench.md.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bench
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: basho-bench
+  namespace: bench
+spec:
+  runPolicy: Serial
+  source:
+    type: Dockerfile
+    dockerfile: |
+      FROM docker.io/library/erlang:26
+      RUN apt-get update && apt-get install -y --no-install-recommends git build-essential cmake ca-certificates \
+          && rm -rf /var/lib/apt/lists/*
+      RUN git clone --depth 1 -b openriak-3.2 https://github.com/OpenRiak/basho_bench /opt/basho_bench
+      WORKDIR /opt/basho_bench
+      RUN sed -i '0,/^new(Id) ->/s//new(Id) ->\n    _ = application:ensure_all_started(ssl),/' src/basho_bench_driver_riakc_pb.erl \
+          && grep -n -A1 '^new(Id) ->' src/basho_bench_driver_riakc_pb.erl
+      RUN rebar3 escriptize || (rebar3 compile && rebar3 escriptize)
+      RUN ls -la _build/default/bin/ && cp _build/default/bin/basho_bench /usr/local/bin/basho_bench
+      RUN chmod -R g=u /opt/basho_bench && chgrp -R 0 /opt/basho_bench
+      USER 1001
+      WORKDIR /opt/basho_bench
+      ENTRYPOINT ["/bin/bash"]
+  strategy:
+    type: Docker
+    dockerStrategy: {}
+  output:
+    to:
+      kind: DockerImage
+      name: image-registry.openshift-image-registry.svc:5000/bench/basho-bench:openriak-3.2-ssl
