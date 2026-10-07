@@ -6,7 +6,10 @@ a constant load on one TLS cluster while failures are injected one after another
 [`hack/dr-gameday.sh`](https://github.com/marthydavid/openriak-operator/blob/test/dr-gameday/hack/dr-gameday.sh),
 the load and the read-back are the [soak harness](scaling.md#soak-test-a-constant-load-for-hours).
 
-**Status: in progress.** This page is updated as each fault finishes. Findings so far: D5 (finding 1) and D3 (finding 2), below.
+**Status: stopped early.** Four faults were run. The load was stopped at 23:07, 31 minutes before its planned
+end, because it was not to run longer; the clients' read-back of every key therefore did **not** happen, and
+the question whether D5 lost acknowledged writes is **not answered** by this run. Two findings: D5
+(finding 1, a defect) and D3 (finding 2, the method did not work).
 
 ## Setup
 
@@ -81,8 +84,62 @@ same 15 s.
    proposes for this). A short follow-up test can confirm the explanation: apply the same policy and
    compare an existing connection with a new one from `soak-0` to `soak-1:8087`.
 
-## Still to come
+## Charts
 
-The load runs until about 23:38; then the harness reads every key back, and `-verify-only` compares Riak with
-the CRs. Those two results say whether D5 lost acknowledged writes, and are added below.
+The faults are the vertical lines (D1 22:38, D7 22:41, D5 22:45, D3 22:49). Samples are 30 s apart and the
+clients report in 60 s windows, so a dip appears one or two samples after its line.
 
+![Throughput](assets/dr-gameday-1/throughput-light.svg#only-light)
+![Throughput](assets/dr-gameday-1/throughput-dark.svg#only-dark)
+
+![Latency seen by the clients](assets/dr-gameday-1/latency-light.svg#only-light)
+![Latency seen by the clients](assets/dr-gameday-1/latency-dark.svg#only-dark)
+
+![Riak's own latency against the clients'](assets/dr-gameday-1/server-light.svg#only-light)
+![Riak's own latency against the clients'](assets/dr-gameday-1/server-dark.svg#only-dark)
+
+![Memory](assets/dr-gameday-1/memory-light.svg#only-light)
+![Memory](assets/dr-gameday-1/memory-dark.svg#only-dark)
+
+![Node CPU](assets/dr-gameday-1/cpu-light.svg#only-light)
+![Node CPU](assets/dr-gameday-1/cpu-dark.svg#only-dark)
+
+## After the load was stopped
+
+| Check | Result |
+|---|---|
+| Client read-back of every key | **not run** (the load was stopped before its end; the clients have no early-stop that still reads back) |
+| Load totals from the clients' windows | about 461,000 operations, 4,841 errors (1.05 %), all inside the windows of D1, D7 and D5; no client logged lost, stale or corrupt values (those counters only appear in the read-back) |
+| `test/scale -verify-only` (Riak against the CRs, every node) | **failed with 2 mismatches, both on `soak-2`**: "member-status lists 1 nodes, want 3" and "ring is not Valid:3 / Leaving:0 / Exiting:0 / Joining:0 / Down:0"; the other 186 facts matched on every node |
+| Ring 25 minutes after D5 | still divergent: `soak-2` alone in its ring at 100 %, `soak-0` and `soak-1` listing three members; handoffs still waiting (43 and 23 partitions) |
+| Data on disk then | bitcask `soak-0` 1.8 GB, `soak-1` 1.7 GB, **`soak-2` 8.2 GB** (it was 0.4 GB right after D5) |
+| OOM kills, container restarts | 0 and 0 (Riak and operator) |
+
+The size of `soak-2` suggests why this matters: in its own one-node ring it stores every partition's replicas
+itself, so a write that a client sent to `soak-2` through the Service would exist only there, while the other
+nodes believe `soak-2` holds just a third of the ring. That explanation was not tested; the read-back would
+have shown it as lost or stale values.
+
+## What this run does not show
+
+- Whether D5 lost acknowledged writes (no read-back).
+- How Riak behaves under a real network partition (D3 was not one).
+- D9 (operator killed mid scale-up) was left out on request, and the node-level scenarios (D2, D10) cannot be
+  run safely on these control-plane nodes.
+- One run on one cluster, 16 KiB objects at 200 ops/s; Riak 3.2.6 only.
+
+## State left on the cluster
+
+The namespace `dr-gameday` was kept (`-keep`) with the diverged cluster in it, so the defect can be
+reproduced and inspected; the load clients are gone. The operator on the test cluster runs v1.0.0. Delete the
+namespace when done: `kubectl delete namespace dr-gameday`.
+
+## Reproduce
+
+```bash
+GOOS=linux go build -o scale ./test/scale          # then copy it and hack/dr-gameday.sh to a host next to the cluster
+SKIP=D9 SOAK_MIN=70 NS=dr-gameday SCALE=./scale hack/dr-gameday.sh
+```
+
+`events.log` in the output directory has one line per step; `faults.json` (epochs and labels) next to the
+soak artifacts adds the markers to the charts: `python3 hack/soak-report.py ART_DIR OUT_DIR`.

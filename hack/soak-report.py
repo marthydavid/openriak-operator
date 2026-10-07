@@ -8,6 +8,9 @@ nodes.jsonl, summary.json). For every chart it writes NAME-light.svg and NAME-da
 Material's `#only-light` / `#only-dark` image suffixes), and numbers.json with the statistics quoted in
 the text. Standard library only, so it runs anywhere and the output is reproducible.
 
+A faults.json next to those files ([{"epoch": 1791405473, "label": "D1 delete 1 pod"}, ...]) adds a vertical
+line per injected fault to the throughput and latency charts.
+
 Charts:
   overview     a tile panel: throughput, errors, latency, resources, verdict
   throughput   achieved ops/s against the target
@@ -300,7 +303,14 @@ def timed_phase(samples):
     return live[lo:hi]
 
 
-def chart_throughput(samples, target):
+def mark_faults(c, faults, xmax):
+    """Vertical lines for injected faults ([(hours, label)]); a run without a faults.json has none."""
+    for i, (x, label) in enumerate(faults):
+        if 0 <= x <= xmax:
+            c.vline(x, c.p["series"][i % len(c.p["series"])], label)
+
+
+def chart_throughput(samples, target, faults=()):
     pts = [(hours(r), r["sample"].get("Rate")) for r in timed_phase(samples)]
 
     def make(theme):
@@ -309,11 +319,12 @@ def chart_throughput(samples, target):
         c.axes(0, max((x for x, _ in pts), default=1), 0, top)
         c.hline(target, c.p["muted"], "target")
         c.line(pts, c.p["series"][0], 1.8, label="achieved")
+        mark_faults(c, faults, max((x for x, _ in pts), default=1))
         return c
     return make
 
 
-def chart_latency(samples):
+def chart_latency(samples, faults=()):
     series = [("put p99 (worst client)", series_clients(samples, "Put", "p99", "max"), 1),
               ("get p99 (worst client)", series_clients(samples, "Get", "p99", "max"), 0),
               ("put p50 (median client)", series_clients(samples, "Put", "p50", "med"), 3),
@@ -327,6 +338,7 @@ def chart_latency(samples):
         c.axes(0, max((x for _, s, _ in series for x, _ in s), default=1), lo, max(hi, lo * 10))
         for label, s, color in series:
             c.line(s, c.p["series"][color], 1.4, "3 3" if "p50" in label else None, label)
+        mark_faults(c, faults, max((x for _, s, _ in series for x, _ in s), default=1))
         return c
     return make
 
@@ -480,6 +492,11 @@ def build(art, out):
         sys.exit(f"no samples.jsonl in {art}")
     cfg = summary.get("config", {})
     t0 = samples[0]["time"]
+    faults = []  # faults.json: [{"epoch": seconds, "label": "..."}], drawn as vertical lines
+    fp = os.path.join(art, "faults.json")
+    if os.path.exists(fp):
+        with open(fp, encoding="utf-8") as f:
+            faults = [((float(x["epoch"]) - parse_time(t0)) / 3600.0, x["label"]) for x in json.load(f)]
     live = timed_phase(samples) or samples  # the timed phase only
     rates = [r["sample"].get("Rate", 0) for r in live]
     target = cfg.get("rate_ops_per_s") or max(rates)
@@ -509,8 +526,8 @@ def build(art, out):
     }
     ok = bool(summary.get("passed", False))
     charts = {
-        "overview": chart_overview(numbers, ok), "throughput": chart_throughput(samples, target),
-        "latency": chart_latency(samples), "histogram": chart_histogram(samples),
+        "overview": chart_overview(numbers, ok), "throughput": chart_throughput(samples, target, faults),
+        "latency": chart_latency(samples, faults), "histogram": chart_histogram(samples),
         "server": chart_server(samples, metrics, t0), "memory": chart_memory(samples, mem_limit_gib),
         "cpu": chart_cpu(nodes, t0), "disk": chart_disk(samples, pvc_gib), "capacity": chart_capacity(),
     }
