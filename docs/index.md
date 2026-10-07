@@ -32,5 +32,6 @@ cluster in the same namespace via `spec.clusterName`.
 
 !!! note "Authentication model"
     Users authenticate with **client certificates only**. There are no passwords: `RiakUser`
-    requires `spec.certificateRef`, and [cert-manager](https://cert-manager.io) issues the
-    certificate. See [mTLS with cert-manager](mtls.md).
+    requires `spec.certificateRef`, and the certificate comes either from
+    [cert-manager](https://cert-manager.io) or from an external CA you bring. See
+    [mTLS authentication](mtls.md).

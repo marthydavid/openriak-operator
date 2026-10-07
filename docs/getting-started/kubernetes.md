@@ -5,7 +5,7 @@
 - Kubernetes 1.24+ and `kubectl`
 - Helm 3.8+ (OCI registry support)
 - A default (or named) `StorageClass` for durable clusters — see [ephemeral storage](../crds/riakcluster.md#storage) for test clusters without one
-- [cert-manager](https://cert-manager.io) for TLS and for **every** `RiakUser`
+- [cert-manager](https://cert-manager.io) for the cluster's TLS certificate and for `RiakUser` certificates unless you bring them from an [external CA](../mtls.md#client-certificates-from-an-external-ca)
 
 ## 1. Install cert-manager
 

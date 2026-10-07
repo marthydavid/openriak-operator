@@ -2,7 +2,7 @@
 
 Installs the [OpenRiak operator](https://github.com/marthydavid/openriak-operator), which manages
 `RiakCluster`, `RiakBucket` and `RiakUser` resources: Riak KV clusters on Kubernetes with
-cert-manager-issued TLS and mTLS client-certificate users.
+TLS (cert-manager) and mTLS client-certificate users (cert-manager or external CA).
 
 | | |
 |---|---|
@@ -14,8 +14,8 @@ cert-manager-issued TLS and mTLS client-certificate users.
 
 - Kubernetes 1.34 or later. Built and verified against the 1.35 client libraries; runs on OpenShift/OKD
   4.21 and 4.22 (default `restricted-v2` SCC, no custom SCC needed) and on AKS.
-- [cert-manager](https://cert-manager.io/docs/installation/) for TLS-enabled clusters and for `RiakUser`
-  client certificates.
+- [cert-manager](https://cert-manager.io/docs/installation/) for the node certificate of TLS-enabled
+  clusters, and for `RiakUser` client certificates unless you supply them from an external CA.
 - A `StorageClass` for durable clusters (or use ephemeral storage for tests).
 - Optional: Prometheus Operator CRDs for the `ServiceMonitor` / `PodMonitor` resources, and Grafana with its
   dashboard sidecar for the bundled dashboard.

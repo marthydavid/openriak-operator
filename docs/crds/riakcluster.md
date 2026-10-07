@@ -72,7 +72,7 @@ spec:
 | `storageSize` | quantity | `10Gi` | Size of each node's data volume |
 | `ephemeralStorage` | bool | `false` | Use an `emptyDir` instead of a PVC. **Data is lost on pod restart** |
 | `riakConfig` | map[string]string | — | Any `riak.conf` key; see [below](#riak-configuration) |
-| `tls.enabled` | bool | `false` | Enable TLS (HTTPS + protobuf TLS) using cert-manager |
+| `tls.enabled` | bool | `false` | Enable TLS (HTTPS + protobuf TLS). The node certificate comes from cert-manager |
 | `tls.certManager.issuerName` | string | — | cert-manager Issuer/ClusterIssuer name |
 | `tls.certManager.issuerKind` | string | `Issuer` | `Issuer` or `ClusterIssuer` |
 | `tls.additionalClientCAs[]` | `{secretRef \| configMapRef: {name, key}}` | — | Extra CAs Riak trusts for client certificates (external CA users). See [External CA](../mtls.md#client-certificates-from-an-external-ca) |
@@ -153,7 +153,8 @@ spec:
 
 `enabled: true` is required; setting only `certManager` has no effect. The operator requests the
 certificate `<cluster>-tls`, mounts the Secret at `/etc/riak/certs` and configures Riak's HTTPS
-listener. Details and rotation: [mTLS with cert-manager](../mtls.md).
+listener. Details and rotation: [mTLS authentication](../mtls.md). User certificates can come from
+cert-manager or an external CA (`tls.additionalClientCAs`).
 
 ## Monitoring
 
