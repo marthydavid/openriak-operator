@@ -449,23 +449,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 						},
 					}, monitoringSidecars(cluster)...),
 					TerminationGracePeriodSeconds: ptr(int64(60)),
-					Affinity: &corev1.Affinity{
-						PodAntiAffinity: &corev1.PodAntiAffinity{
-							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
-								{
-									LabelSelector: &metav1.LabelSelector{
-										// Riak pods only (app=riak): selecting on cluster=<name>
-										// alone also repelled unrelated pods carrying that label.
-										MatchLabels: map[string]string{
-											"app":     "riak",
-											"cluster": cluster.Name,
-										},
-									},
-									TopologyKey: "kubernetes.io/hostname",
-								},
-							},
-						},
-					},
+					Affinity:                      riakAffinity(cluster),
 				},
 			},
 			VolumeClaimTemplates: volumeClaimTemplates,
@@ -480,6 +464,34 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 	}
 
 	return nil
+}
+
+// riakAffinity builds the pod affinity of the Riak pods from spec.podAntiAffinity: Required (the
+// default) allows one Riak pod per node, Preferred spreads them when possible but lets the
+// scheduler double up, None adds no rule.
+func riakAffinity(cluster *riakv1.RiakCluster) *corev1.Affinity {
+	term := corev1.PodAffinityTerm{
+		LabelSelector: &metav1.LabelSelector{
+			// Riak pods only (app=riak): selecting on cluster=<name> alone also repelled
+			// unrelated pods carrying that label.
+			MatchLabels: map[string]string{"app": "riak", "cluster": cluster.Name},
+		},
+		TopologyKey: "kubernetes.io/hostname",
+	}
+	switch cluster.Spec.PodAntiAffinity {
+	case riakv1.PodAntiAffinityNone:
+		return nil
+	case riakv1.PodAntiAffinityPreferred:
+		return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+				{Weight: 100, PodAffinityTerm: term},
+			},
+		}}
+	default:
+		return &corev1.Affinity{PodAntiAffinity: &corev1.PodAntiAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{term},
+		}}
+	}
 }
 
 // hasDataVolumeClaim reports whether a StatefulSet's volumeClaimTemplates

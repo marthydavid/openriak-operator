@@ -16,7 +16,7 @@ The `PHASE` and `READY` columns come from `status`; the `Ready` condition's mess
 
 | Symptom | Cause / fix |
 |---------|-------------|
-| Pods `Pending`, "didn't match pod anti-affinity" | Fewer schedulable nodes than `spec.size`. Reduce size or add nodes |
+| Pods `Pending`, "didn't match pod anti-affinity" | Fewer schedulable nodes than `spec.size`: by default each Riak node needs its own Kubernetes node. Reduce size, add nodes, or on a test cluster set `spec.podAntiAffinity: Preferred` ([details](crds/riakcluster.md#running-more-riak-nodes-than-kubernetes-nodes)) |
 | Your own pod in the same namespace stays `Pending` with "didn't satisfy existing pods anti-affinity rules" | Clusters created by operator versions before 0.0.11 select pods by `cluster=<riak cluster name>` alone, so any pod with that label is repelled from nodes hosting a Riak node. Upgrade the operator (the cluster rolls once and gets the narrower `app=riak,cluster=<name>` selector), or use another label key, e.g. `riak-target` |
 | Pods `Pending`, unbound PVC | StorageClass missing or cannot provision. `kubectl get pvc`; set `storageClassName` or use `ephemeralStorage: true` for tests |
 | `CrashLoopBackOff` on OpenShift, permission denied on `/etc/riak` | Custom operand image without group-0 writable dirs — see [OpenShift](platforms/openshift.md#security-context-constraints) |
