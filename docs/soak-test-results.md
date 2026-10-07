@@ -2,7 +2,7 @@
 
 A four-hour constant-load run against a three-node cluster on the test OKD cluster
 (see [Test environment](test-environment.md)). The harness is `test/scale -soak`; how to run it and
-what each flag does is in [Scaling](scaling.md#soak-test).
+what each flag does is in [Scaling](scaling.md#soak-test-a-constant-load-for-hours).
 
 **Verdict: passed.** 600 ops/s of 128 KiB objects for 4 hours, no OOM kill, no container restart,
 no scaling action needed, no lost or corrupt value.
