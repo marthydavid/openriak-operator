@@ -138,6 +138,21 @@ spec:
                   type: string
                 description: NodeSelector for node affinity.
                 type: object
+              podAntiAffinity:
+                default: Required
+                description: |-
+                  PodAntiAffinity controls how the Riak pods of this cluster are spread over Kubernetes nodes.
+                  Required (the default) allows at most one Riak pod per node, so the cluster can never have
+                  more pods than there are schedulable nodes. Preferred still spreads the pods when it can
+                  but lets the scheduler put several on one node, which is what lets a cluster grow past the
+                  node count (test and small clusters). None adds no rule. With Preferred or None the loss of
+                  one Kubernetes node can take out several Riak nodes at once, and with them more than one
+                  replica of some data: do not use it where that matters.
+                enum:
+                - Required
+                - Preferred
+                - None
+                type: string
               resources:
                 description: Resources specifies compute resources for each Riak node.
                 properties:

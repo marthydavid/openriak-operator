@@ -11,10 +11,43 @@ A `RiakCluster` is a set of Riak nodes. The operator reconciles it into:
 | `Certificate` | `<cluster>-tls` | When TLS is enabled |
 | `ServiceMonitor` | — | When monitoring is enabled and the Prometheus Operator CRDs exist |
 
-Pods of one cluster have a **required** anti-affinity on `kubernetes.io/hostname`: each node of a
-cluster runs on a different Kubernetes node, so `spec.size` cannot exceed the number of schedulable
+By default the pods of one cluster have a **required** anti-affinity on `kubernetes.io/hostname`: each
+Riak node runs on a different Kubernetes node, so `spec.size` cannot exceed the number of schedulable
 nodes (further pods stay `Pending`). The anti-affinity selects only the cluster's Riak pods
-(`app=riak,cluster=<name>`); other pods are not affected by it.
+(`app=riak,cluster=<name>`); other pods are not affected by it. `spec.podAntiAffinity` changes that, see
+[Running more Riak nodes than Kubernetes nodes](#running-more-riak-nodes-than-kubernetes-nodes).
+
+## Running more Riak nodes than Kubernetes nodes
+
+With the default `podAntiAffinity: Required` a cluster can never be larger than the number of
+schedulable Kubernetes nodes: on a 3-node Kubernetes cluster `size: 4` leaves the 4th pod `Pending` with
+`didn't match pod anti-affinity rules`. On a test or small cluster that is the limit you hit first. Set the
+mode to `Preferred` and the scheduler still spreads the Riak pods over the nodes when it can, but puts
+several on one node when it has to:
+
+```yaml
+spec:
+  size: 5
+  podAntiAffinity: Preferred   # or None for no rule at all
+```
+
+| Mode | Behaviour |
+|------|-----------|
+| `Required` (default) | at most one Riak pod per Kubernetes node; `size` is capped by the node count |
+| `Preferred` | spread when possible (weight 100), double up when not |
+| `None` | no rule; the scheduler decides |
+
+!!! warning "Not for clusters where a node loss must not cost data"
+    With `Preferred` or `None` several Riak nodes can share one Kubernetes node. Losing that node then
+    takes out more than one Riak node at once, and so more than one replica of some data. With `n_val` 3
+    that can mean losing the quorum or the data. Use it for test and development clusters, or where the
+    storage is not node-local; keep `Required` for production.
+
+Changing the mode changes the pod template, so the StatefulSet **rolls every pod once**. The default is the
+previous behaviour, so existing clusters are not rolled by upgrading the operator. More Riak nodes also
+help the failure mode of a very small cluster: with fewer than about five nodes Riak cannot keep all
+three replicas of every partition on different nodes, so a node restart makes `pr=2`/`pw=2` requests fail
+for some keys (seen in the soak test of the scale harness).
 
 ## Minimal example
 
@@ -49,6 +82,7 @@ spec:
 | `monitoring.metricsConfig.configMapKeyRef` | `{name, key}` | built-in mapping | Your own json_exporter rules, from a ConfigMap in the cluster's namespace |
 | `servicePort` | int, 1024–65535 | `8087` | Port of the protobuf service |
 | `nodeSelector` | map | — | Restrict nodes the pods can schedule on |
+| `podAntiAffinity` | `Required` \| `Preferred` \| `None` | `Required` | How Riak pods spread over Kubernetes nodes; see [below](#running-more-riak-nodes-than-kubernetes-nodes) |
 
 ## Storage
 
