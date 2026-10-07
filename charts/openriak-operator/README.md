@@ -6,8 +6,8 @@ TLS (cert-manager) and mTLS client-certificate users (cert-manager or external C
 
 | | |
 |---|---|
-| Chart version | see `Chart.yaml` `version` |
-| Operator image | `ghcr.io/marthydavid/openriak-operator`, tag defaults to `appVersion` |
+| Chart version | `1.0.0` (`Chart.yaml` `version`) |
+| Operator image | `ghcr.io/marthydavid/openriak-operator:1.0.0` (tag defaults to `appVersion`) |
 | Default Riak image | `ghcr.io/marthydavid/riak:3.2.6` (3.0, 3.2 and 3.4 are published) |
 
 ## Prerequisites
@@ -25,7 +25,7 @@ TLS (cert-manager) and mTLS client-certificate users (cert-manager or external C
 From the OCI registry (published by the chart release workflow):
 
 ```bash
-helm install openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator \
+helm install openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator --version 1.0.0 \
   --namespace openriak-system --create-namespace
 ```
 
@@ -49,7 +49,7 @@ Then create a cluster, for example
 ## Upgrade
 
 ```bash
-helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator \
+helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator --version 1.0.0 \
   --namespace openriak-system
 ```
 
@@ -59,7 +59,7 @@ changes a CRD, apply the new schemas yourself with server-side apply (they are l
 ```bash
 for crd in riakclusters riakusers riakbuckets; do
   kubectl apply --server-side -f \
-    https://raw.githubusercontent.com/marthydavid/openriak-operator/main/config/crd/bases/riak.openriak.io_$crd.yaml
+    https://raw.githubusercontent.com/marthydavid/openriak-operator/v1.0.0/config/crd/bases/riak.openriak.io_$crd.yaml
 done
 ```
 
