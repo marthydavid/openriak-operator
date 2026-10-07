@@ -22,11 +22,19 @@ OpenRiak organisation keeps a fork,
 2025-01-13, "OTP 26 compatible deps") depends on the OpenRiak forks of its libraries. This page uses that
 branch with Erlang/OTP 26.
 
+## The image
+
+CI builds it from [`images/basho-bench/Dockerfile`](https://github.com/marthydavid/openriak-operator/blob/main/images/basho-bench/Dockerfile)
+(workflow `build-basho-bench.yml`) and publishes `ghcr.io/marthydavid/basho-bench:openriak-3.2` (also `latest`
+and a short-SHA tag) from `main`; same-repo pull requests push `pr-<N>` only. It is `linux/amd64` only: the
+arm64 build of the `eleveldb` and `bitcask` dependencies has not been tried. The Dockerfile pins the fork to
+the commit that was tested. `soak-like.py` uses this image by default.
+
 ## Building it on OpenShift
 
 [`build.yaml`](https://github.com/marthydavid/openriak-operator/blob/main/examples/basho-bench/build.yaml)
-is a `BuildConfig` with the Dockerfile inline (no git source needed) that pushes to the cluster's internal
-registry:
+is a `BuildConfig` with the same Dockerfile inline (no git source needed) that pushes to the cluster's internal
+registry, for clusters that cannot pull from `ghcr.io`:
 
 ```bash
 kubectl apply -f examples/basho-bench/build.yaml          # creates the bench namespace and the BuildConfig

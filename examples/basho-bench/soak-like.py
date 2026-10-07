@@ -8,8 +8,9 @@ type each), 10 certificate users and one load client per user, 600 ops/s in tota
     python3 soak-like.py [--namespace bench] [--duration 28] > soak-like.yaml
     kubectl apply -f soak-like.yaml
 
-The Issuer riak-ca-issuer must exist in the namespace (see docs/mtls.md) and the image must be
-built from examples/basho-bench/build.yaml.
+The Issuer riak-ca-issuer must exist in the namespace (see docs/mtls.md). The load image defaults to
+ghcr.io/marthydavid/basho-bench:openriak-3.2 (images/basho-bench); pass --bench-image to use one built
+with examples/basho-bench/build.yaml.
 """
 import argparse
 
@@ -17,7 +18,7 @@ p = argparse.ArgumentParser()
 p.add_argument("--namespace", default="bench")
 p.add_argument("--name", default="bsoak", help="cluster name")
 p.add_argument("--image", default="ghcr.io/marthydavid/riak:3.2.6")
-p.add_argument("--bench-image", default="image-registry.openshift-image-registry.svc:5000/bench/basho-bench:openriak-3.2-ssl")
+p.add_argument("--bench-image", default="ghcr.io/marthydavid/basho-bench:openriak-3.2")
 p.add_argument("--storage-class", default="lvms-vg1")
 p.add_argument("--storage", default="300Gi")
 p.add_argument("--memory", default="16Gi")
