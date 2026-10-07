@@ -37,15 +37,11 @@ kubectl -n openriak-system get pods
 kubectl get crd | grep riak.openriak.io
 ```
 
-!!! warning "CRDs are not upgraded by Helm"
-    Helm installs `crds/` on first install only. When upgrading across a CRD change, apply them
-    yourself and use server-side apply, because the schemas are large:
-
-    ```bash
-    kubectl apply --server-side -f https://raw.githubusercontent.com/marthydavid/openriak-operator/main/config/crd/bases/riak.openriak.io_riakclusters.yaml
-    ```
-    Repeat for `riakusers` and `riakbuckets`. `helm uninstall` also leaves the CRDs and every Riak
-    resource in place.
+!!! note "CRDs are part of the release"
+    The chart renders the CRDs from its templates, so `helm upgrade` updates them with the operator.
+    `helm uninstall` leaves them, and every Riak resource, in place (`crds.keep`). To manage the CRDs
+    yourself set `crds.install=false`. Upgrading from a chart that shipped them in `crds/` needs a
+    one-time adoption: see [the chart README](https://github.com/marthydavid/openriak-operator/blob/main/charts/openriak-operator/README.md#upgrading-from-an-earlier-chart).
 
 ## Alternative: kustomize from a checkout
 

@@ -5,17 +5,21 @@
 The first stable release. It adds client certificates from an **external CA**, lets a cluster have more Riak
 nodes than Kubernetes nodes, and documents the load and soak tests that the operator has been run against.
 
-!!! warning "Apply the CRDs before upgrading"
-    Two CRDs changed (`RiakCluster` and `RiakUser`), and Helm does not upgrade `crds/`. Apply them first, with
-    server-side apply because the schemas are large:
+!!! warning "First upgrade from an earlier chart: adopt the CRDs"
+    From this release the chart renders the CRDs from its templates, so `helm upgrade` updates them (Helm never
+    upgraded the old `crds/` directory). CRDs installed by an earlier chart are not owned by the Helm release, so
+    the first upgrade must adopt them:
 
     ```bash
-    for crd in riakclusters riakusers riakbuckets; do
-      kubectl apply --server-side -f \
-        https://raw.githubusercontent.com/marthydavid/openriak-operator/v1.0.0/config/crd/bases/riak.openriak.io_$crd.yaml
-    done
-    helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator --version 1.0.0 -n openriak-system
+    # Helm 3.17 or later
+    helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator --version 1.0.0 \
+      -n openriak-system --take-ownership
     ```
+
+    On older Helm 3, label and annotate the three CRDs for the release first; see the
+    [chart README](https://github.com/marthydavid/openriak-operator/blob/main/charts/openriak-operator/README.md#upgrading-from-an-earlier-chart).
+    Two CRDs changed in this release (`RiakCluster` and `RiakUser`), so the upgrade applies new schemas. If you
+    manage CRDs yourself, set `crds.install=false` and apply `config/crd/bases` from the `v1.0.0` tag first.
 
     The chart also gains RBAC for Secrets (see below). **Existing clusters are not restarted by the upgrade**:
     `spec.podAntiAffinity` defaults to `Required` (today's behaviour) and TLS clusters without
@@ -23,6 +27,11 @@ nodes than Kubernetes nodes, and documents the load and soak tests that the oper
 
 ### New
 
+- **CRDs ship in the chart's templates** ([#97](https://github.com/marthydavid/openriak-operator/pull/97),
+  [#96](https://github.com/marthydavid/openriak-operator/issues/96)). `helm upgrade` now updates the CRDs, and
+  `helm uninstall` leaves them (and every Riak resource) in place through `helm.sh/resource-policy: keep`.
+  Values `crds.install` (default `true`) and `crds.keep` (default `true`); with `crds.keep=false` an uninstall
+  deletes the CRDs and everything built on them. CI checks that the chart copy matches `config/crd/bases`.
 - **Client certificates from an external CA** ([#70](https://github.com/marthydavid/openriak-operator/pull/70),
   [#69](https://github.com/marthydavid/openriak-operator/issues/69)). `spec.tls.additionalClientCAs` lists extra
   CA certificates (a Secret or ConfigMap key) that Riak trusts next to the cluster CA; the operator merges them
