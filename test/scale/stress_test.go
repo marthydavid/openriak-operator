@@ -222,3 +222,29 @@ func TestSummarize_mergesErrorKinds(t *testing.T) {
 		t.Errorf("errors %d", sum.Total.Errors)
 	}
 }
+
+func TestParseStressResult_integrityKinds(t *testing.T) {
+	line := `RESULT {"ops": 10, "puts": 5, "gets": 5, "errors": 0, "lost": 0, "corrupt": 1, "stale": 2, "ahead": 3, ` +
+		`"landed": 4, "final_lost": 0, "final_corrupt": 0, "verified": 5, "duration_s": 1, "ops_per_s": 10}`
+	r, err := parseStressResult("noise\n" + line + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Corrupt != 1 || r.Stale != 2 || r.Ahead != 3 || r.Landed != 4 {
+		t.Fatalf("got corrupt=%d stale=%d ahead=%d landed=%d", r.Corrupt, r.Stale, r.Ahead, r.Landed)
+	}
+	sum := summarize([]stressResult{r, r})
+	if sum.Total.Stale != 4 || sum.Total.Ahead != 6 || sum.Total.Landed != 8 {
+		t.Fatalf("summed: %+v", sum.Total)
+	}
+	bad := strings.Join(stressProblems("c0", sum, 0), "\n")
+	for _, want := range []string{"LOST UPDATES: 4", "6 reads returned a newer version", "CORRUPTION"} {
+		if !strings.Contains(bad, want) {
+			t.Errorf("missing %q in %q", want, bad)
+		}
+	}
+	clean := summarize([]stressResult{{Puts: 5, Landed: 400}})
+	if p := stressProblems("c0", clean, 0); len(p) != 0 {
+		t.Fatalf("writes that landed after a timeout are benign: %v", p)
+	}
+}

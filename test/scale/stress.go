@@ -120,6 +120,9 @@ type stressResult struct {
 	Errors       int64                    `json:"errors"`
 	Lost         int64                    `json:"lost"`
 	Corrupt      int64                    `json:"corrupt"`
+	Stale        int64                    `json:"stale"`
+	Ahead        int64                    `json:"ahead"`
+	Landed       int64                    `json:"landed"`
 	Siblings     int64                    `json:"siblings"`
 	Verified     int64                    `json:"verified"`
 	FinalLost    int64                    `json:"final_lost"`
@@ -163,6 +166,9 @@ func summarize(results []stressResult) stressSummary {
 		s.Total.Errors += r.Errors
 		s.Total.Lost += r.Lost
 		s.Total.Corrupt += r.Corrupt
+		s.Total.Stale += r.Stale
+		s.Total.Ahead += r.Ahead
+		s.Total.Landed += r.Landed
 		s.Total.Siblings += r.Siblings
 		s.Total.Verified += r.Verified
 		s.Total.FinalLost += r.FinalLost
@@ -205,6 +211,13 @@ func stressProblems(cluster string, s stressSummary, maxErrors int64) []string {
 	if t.Corrupt > 0 || t.FinalCorrupt > 0 {
 		bad = append(bad, fmt.Sprintf("%s: CORRUPTION: %d wrong values during the run, %d at the final check",
 			cluster, t.Corrupt, t.FinalCorrupt))
+	}
+	if t.Stale > 0 {
+		bad = append(bad, fmt.Sprintf("%s: LOST UPDATES: %d reads returned an older version than was acknowledged",
+			cluster, t.Stale))
+	}
+	if t.Ahead > 0 {
+		bad = append(bad, fmt.Sprintf("%s: %d reads returned a newer version nobody wrote or explains", cluster, t.Ahead))
 	}
 	return bad
 }
