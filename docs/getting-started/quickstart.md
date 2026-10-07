@@ -1,6 +1,7 @@
 # Quick start
 
-Works on any cluster where the operator and cert-manager are installed
+Works on any cluster where the operator and cert-manager are installed (this walkthrough uses
+cert-manager for user certificates; to use your own CA see [mTLS authentication](../mtls.md))
 ([Kubernetes](kubernetes.md) / [OpenShift](openshift.md)). Commands use `kubectl`; substitute `oc`
 on OpenShift.
 

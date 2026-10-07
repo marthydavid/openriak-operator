@@ -35,11 +35,11 @@ The `PHASE` and `READY` columns come from `status`; the `Ready` condition's mess
 | Symptom | Cause / fix |
 |---------|-------------|
 | Waits, never starts | Cluster not `Ready` yet — the user retries automatically |
-| `Ready` but `Cert` column is `false` | cert-manager has not issued: `kubectl describe certificate <riakuser>-client-tls` |
-| `certificate verify failed` | User and cluster issuers must chain to the same CA |
-| Auth fails with a valid cert | CN must equal `spec.username`: inspect the issued cert with `openssl x509 -noout -subject` |
+| `Ready` but `Cert` column is `false` | Read `status.certificateError`. cert-manager users: `kubectl describe certificate <riakuser>-client-tls`. External-CA users: the error names the problem (CN, usage, expiry, untrusted CA) |
+| `certificate verify failed` | The user certificate must chain to a CA the cluster trusts: the same CA as the cluster issuer, or one listed in `spec.tls.additionalClientCAs` |
+| Auth fails with a valid cert | CN must equal `spec.username`: inspect the cert with `openssl x509 -noout -subject` |
 
-More in [mTLS with cert-manager](mtls.md#troubleshooting).
+More in [mTLS authentication](mtls.md#troubleshooting).
 
 ## RiakBucket
 

@@ -50,7 +50,7 @@ nav:
       - Vanilla Kubernetes: platforms/kubernetes.md
       - OpenShift: platforms/openshift.md
   - Operations:
-      - mTLS with cert-manager: mtls.md
+      - mTLS authentication: mtls.md
       - Operator configuration: operator-configuration.md
       - Metrics examples: metrics-examples.md
       - Scaling: scaling.md

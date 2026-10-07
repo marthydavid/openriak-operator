@@ -8,7 +8,7 @@ Applies to upstream Kubernetes 1.24+ and distributions such as kind, minikube, k
 |------|---------|
 | Kubernetes | 1.24+ |
 | StorageClass | Dynamic provisioning for durable clusters. kind: `standard`; EKS: `gp3`; GKE: `standard-rwo`; AKS: `managed-csi`. Otherwise use `ephemeralStorage: true` |
-| cert-manager | Required for TLS and for every `RiakUser` |
+| cert-manager | Required for the cluster TLS certificate; also issues `RiakUser` certificates unless they come from an [external CA](../mtls.md#client-certificates-from-an-external-ca) |
 | Nodes | At least `spec.size` schedulable nodes (required hostname anti-affinity) |
 | Registry access | `ghcr.io/marthydavid/*`; set `imagePullSecrets` on the operator chart or mirror the images and use `--riak-image` |
 
