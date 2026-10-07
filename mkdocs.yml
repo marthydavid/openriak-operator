@@ -57,5 +57,6 @@ nav:
       - Scale test results: scale-test-results.md
       - Soak test results: soak-test-results.md
       - Basho Bench: basho-bench.md
+      - DR game day 1: dr-gameday-1.md
       - Test environment: test-environment.md
       - Troubleshooting: troubleshooting.md
