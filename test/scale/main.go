@@ -148,6 +148,8 @@ func main() {
 	flag.StringVar(&o.soak.podAntiAffinity, "soak-pod-anti-affinity", "",
 		"spec.podAntiAffinity of the cluster: Required (the operator's default), Preferred or None; "+
 			"Preferred/None let the cluster grow past the number of Kubernetes nodes")
+	flag.StringVar(&o.soak.artifacts, "soak-artifacts", "",
+		"directory to save the run's time series (samples, every riak_* metric, node usage), logs and summary to")
 	flag.Float64Var(&o.soak.maxDisk, "soak-max-disk", 90,
 		"percent: stop the clients and fail when any data volume is fuller than this (0 = never)")
 	flag.StringVar(&o.soak.clientCPU, "soak-client-cpu", "250m",
