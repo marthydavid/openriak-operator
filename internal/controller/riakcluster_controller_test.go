@@ -1011,6 +1011,84 @@ var _ = Describe("RiakCluster Controller", func() {
 		})
 	})
 
+	Context("pod anti-affinity mode", func() {
+		const clusterName = "affinity-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		affinityOf := func() *corev1.Affinity {
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			return sts.Spec.Template.Spec.Affinity
+		}
+		create := func(mode string) {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest", PodAntiAffinity: mode},
+			})).To(Succeed())
+		}
+
+		It("defaults to Required, one Riak pod per node", func() {
+			create("")
+			c := &riakv1.RiakCluster{}
+			Expect(k8sClient.Get(ctx, nn, c)).To(Succeed())
+			Expect(c.Spec.PodAntiAffinity).To(Equal(riakv1.PodAntiAffinityRequired), "the API server defaults it")
+
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			pa := affinityOf().PodAntiAffinity
+			Expect(pa.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(1))
+			Expect(pa.PreferredDuringSchedulingIgnoredDuringExecution).To(BeEmpty())
+		})
+
+		It("Preferred lets the scheduler put several Riak pods on one node", func() {
+			create(riakv1.PodAntiAffinityPreferred)
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			pa := affinityOf().PodAntiAffinity
+			Expect(pa.RequiredDuringSchedulingIgnoredDuringExecution).To(BeEmpty(), "a required rule is what blocked scaling")
+			Expect(pa.PreferredDuringSchedulingIgnoredDuringExecution).To(HaveLen(1))
+			w := pa.PreferredDuringSchedulingIgnoredDuringExecution[0]
+			Expect(w.Weight).To(Equal(int32(100)))
+			Expect(w.PodAffinityTerm.TopologyKey).To(Equal("kubernetes.io/hostname"))
+			Expect(w.PodAffinityTerm.LabelSelector.MatchLabels).To(Equal(map[string]string{"app": "riak", "cluster": clusterName}))
+		})
+
+		It("None adds no affinity at all", func() {
+			create(riakv1.PodAntiAffinityNone)
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(affinityOf()).To(BeNil())
+		})
+
+		It("follows a change of the mode on an existing cluster", func() {
+			create(riakv1.PodAntiAffinityRequired)
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(affinityOf().PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(HaveLen(1))
+
+			c := &riakv1.RiakCluster{}
+			Expect(k8sClient.Get(ctx, nn, c)).To(Succeed())
+			c.Spec.PodAntiAffinity = riakv1.PodAntiAffinityPreferred
+			Expect(k8sClient.Update(ctx, c)).To(Succeed())
+			_, err = reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			pa := affinityOf().PodAntiAffinity
+			Expect(pa.RequiredDuringSchedulingIgnoredDuringExecution).To(BeEmpty())
+			Expect(pa.PreferredDuringSchedulingIgnoredDuringExecution).To(HaveLen(1))
+		})
+
+		It("rejects an unknown mode", func() {
+			err := k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest", PodAntiAffinity: "Sometimes"},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("podAntiAffinity"))
+		})
+	})
+
 	Context("reconcileService labels", func() {
 		const clusterName = "svc-label-cluster"
 

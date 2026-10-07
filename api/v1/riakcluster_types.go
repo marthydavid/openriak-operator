@@ -82,7 +82,26 @@ type RiakClusterSpec struct {
 
 	// NodeSelector for node affinity.
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// PodAntiAffinity controls how the Riak pods of this cluster are spread over Kubernetes nodes.
+	// Required (the default) allows at most one Riak pod per node, so the cluster can never have
+	// more pods than there are schedulable nodes. Preferred still spreads the pods when it can
+	// but lets the scheduler put several on one node, which is what lets a cluster grow past the
+	// node count (test and small clusters). None adds no rule. With Preferred or None the loss of
+	// one Kubernetes node can take out several Riak nodes at once, and with them more than one
+	// replica of some data: do not use it where that matters.
+	// +kubebuilder:validation:Enum=Required;Preferred;None
+	// +kubebuilder:default=Required
+	// +optional
+	PodAntiAffinity string `json:"podAntiAffinity,omitempty"`
 }
+
+// Pod anti-affinity modes for RiakClusterSpec.PodAntiAffinity.
+const (
+	PodAntiAffinityRequired  = "Required"
+	PodAntiAffinityPreferred = "Preferred"
+	PodAntiAffinityNone      = "None"
+)
 
 // TLSConfig defines TLS settings for the cluster.
 // MonitoringConfig enables a Prometheus metrics sidecar on every Riak pod.
