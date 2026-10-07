@@ -282,8 +282,26 @@ def worst_p99(r):
 
 
 # ── charts ─────────────────────────────────────────────────────────────────────────────────────
+def timed_phase(samples):
+    """The samples taken while the clients were loading, without the ramp-up and the tail.
+
+    Samples at the very start and end whose rate is under half the run's median are the clients
+    still connecting and the load winding down; they would show as artifacts at the edges. Only the
+    edges are trimmed: a dip in the middle of the run is real and stays."""
+    live = [r for r in samples if r["sample"].get("Rate", 0) > 0]
+    if len(live) < 5:
+        return live
+    floor = 0.5 * statistics.median(r["sample"]["Rate"] for r in live)
+    lo, hi = 0, len(live)
+    while lo < hi and live[lo]["sample"]["Rate"] < floor:
+        lo += 1
+    while hi > lo and live[hi - 1]["sample"]["Rate"] < floor:
+        hi -= 1
+    return live[lo:hi]
+
+
 def chart_throughput(samples, target):
-    pts = [(hours(r), r["sample"].get("Rate")) for r in samples if r["sample"].get("Rate", 0) > 0]
+    pts = [(hours(r), r["sample"].get("Rate")) for r in timed_phase(samples)]
 
     def make(theme):
         c = Chart(theme, "Throughput", f"all clients together; the target is {fmt(target)} ops/s", "hours into the run", "operations per second")
@@ -462,7 +480,7 @@ def build(art, out):
         sys.exit(f"no samples.jsonl in {art}")
     cfg = summary.get("config", {})
     t0 = samples[0]["time"]
-    live = [r for r in samples if r["sample"].get("Rate", 0) > 0] or samples  # the timed phase only
+    live = timed_phase(samples) or samples  # the timed phase only
     rates = [r["sample"].get("Rate", 0) for r in live]
     target = cfg.get("rate_ops_per_s") or max(rates)
     p99s = [v for v in (worst_p99(r) for r in live) if v]
@@ -482,7 +500,7 @@ def build(art, out):
         "p99_worst": max(p99s) if p99s else 0, "ops": ops, "errors": errors,
         "error_rate": (errors / (ops + errors) * 100) if ops + errors else 0.0,
         "integrity": "clean" if not bad else f"{bad} bad",
-        "integrity_sub": f'{res.get("verified", 0):,} keys read back; {res.get("landed", 0)} late writes',
+        "integrity_sub": f'{res.get("verified", 0):,} keys read back', "landed": res.get("landed", 0),
         "mem_peak_gib": mem_peak, "mem_limit_gib": mem_limit_gib, "disk_peak_pct": disk_peak, "pvc_gib": pvc_gib,
         "oom": summary.get("oom_kills", 0), "restarts": summary.get("container_restarts", 0),
         "scaling_actions": len([t for t in summary.get("timeline", []) if "scaling:" in t]),

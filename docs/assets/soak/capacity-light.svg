@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 330" width="860" height="330" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="What the network allows">
+<title>What the network allows</title>
+<text x="70" y="22" fill="#1f2328" font-size="15" font-weight="600">What the network allows</text>
+<text x="70" y="39" fill="#656d76" font-size="11.5">ops/s one node&#x27;s link can carry, by object size (about 1.04 x the object size crosses each NIC per operation)</text>
+<line x1="70" x2="88" y1="48" y2="48" stroke="#cf222e" stroke-width="2.4"/>
+<text x="93" y="52" fill="#656d76" font-size="11">1 GbE (about 90 MB/s)</text>
+<line x1="243" x2="261" y1="48" y2="48" stroke="#8250df" stroke-width="2.4" stroke-dasharray="6 4"/>
+<text x="266" y="52" fill="#656d76" font-size="11">10 GbE (about 900 MB/s)</text>
+<text x="453" y="322" text-anchor="middle" fill="#656d76" font-size="11.5">object size in KiB (log)</text>
+<text transform="translate(16 169) rotate(-90)" text-anchor="middle" fill="#656d76" font-size="11.5">operations per second (log)</text>
+<line x1="70" x2="836" y1="280.0" y2="280.0" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="284.0" text-anchor="end" fill="#656d76" font-size="11">20</text>
+<line x1="70" x2="836" y1="250.6" y2="250.6" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="254.6" text-anchor="end" fill="#656d76" font-size="11">50</text>
+<line x1="70" x2="836" y1="228.3" y2="228.3" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="232.3" text-anchor="end" fill="#656d76" font-size="11">100</text>
+<line x1="70" x2="836" y1="206.0" y2="206.0" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="210.0" text-anchor="end" fill="#656d76" font-size="11">200</text>
+<line x1="70" x2="836" y1="176.6" y2="176.6" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="180.6" text-anchor="end" fill="#656d76" font-size="11">500</text>
+<line x1="70" x2="836" y1="154.3" y2="154.3" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="158.3" text-anchor="end" fill="#656d76" font-size="11">1,000</text>
+<line x1="70" x2="836" y1="132.0" y2="132.0" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="136.0" text-anchor="end" fill="#656d76" font-size="11">2,000</text>
+<line x1="70" x2="836" y1="102.6" y2="102.6" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="106.6" text-anchor="end" fill="#656d76" font-size="11">5,000</text>
+<line x1="70" x2="836" y1="80.3" y2="80.3" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="84.3" text-anchor="end" fill="#656d76" font-size="11">10,000</text>
+<line x1="70" x2="836" y1="58.0" y2="58.0" stroke="#d8dee4" stroke-width="1"/>
+<text x="62" y="62.0" text-anchor="end" fill="#656d76" font-size="11">20,000</text>
+<line x1="97.4" x2="97.4" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="97.4" y="296" text-anchor="middle" fill="#656d76" font-size="11">5</text>
+<line x1="182.5" x2="182.5" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="182.5" y="296" text-anchor="middle" fill="#656d76" font-size="11">10</text>
+<line x1="267.6" x2="267.6" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="267.6" y="296" text-anchor="middle" fill="#656d76" font-size="11">20</text>
+<line x1="380.1" x2="380.1" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="380.1" y="296" text-anchor="middle" fill="#656d76" font-size="11">50</text>
+<line x1="465.2" x2="465.2" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="465.2" y="296" text-anchor="middle" fill="#656d76" font-size="11">100</text>
+<line x1="550.4" x2="550.4" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="550.4" y="296" text-anchor="middle" fill="#656d76" font-size="11">200</text>
+<line x1="662.9" x2="662.9" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="662.9" y="296" text-anchor="middle" fill="#656d76" font-size="11">500</text>
+<line x1="748.0" x2="748.0" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="748.0" y="296" text-anchor="middle" fill="#656d76" font-size="11">1,000</text>
+<line x1="833.1" x2="833.1" y1="58" y2="280" stroke="#d8dee4" stroke-width="1" stroke-dasharray="2 4"/>
+<text x="833.1" y="296" text-anchor="middle" fill="#656d76" font-size="11">2,000</text>
+<line x1="70" x2="836" y1="280" y2="280" stroke="#656d76"/>
+<polyline points="70.0,56.2 82.8,59.6 95.5,62.9 108.3,66.3 121.1,69.6 133.8,72.9 146.6,76.3 159.4,79.6 172.1,83.0 184.9,86.3 197.7,89.7 210.4,93.0 223.2,96.3 236.0,99.7 248.7,103.0 261.5,106.4 274.3,109.7 287.0,113.0 299.8,116.4 312.6,119.7 325.3,123.1 338.1,126.4 350.9,129.7 363.6,133.1 376.4,136.4 389.2,139.8 401.9,143.1 414.7,146.5 427.5,149.8 440.2,153.1 453.0,156.5 465.8,159.8 478.5,163.2 491.3,166.5 504.1,169.8 516.8,173.2 529.6,176.5 542.4,179.9 555.1,183.2 567.9,186.6 580.7,189.9 593.4,193.2 606.2,196.6 619.0,199.9 631.7,203.3 644.5,206.6 657.3,209.9 670.0,213.3 682.8,216.6 695.6,220.0 708.3,223.3 721.1,226.7 733.9,230.0 746.6,233.3 759.4,236.7 772.2,240.0 784.9,243.4 797.7,246.7 810.5,250.0 823.2,253.4 836.0,256.7" fill="none" stroke="#cf222e" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
+<polyline points="70.0,-17.8 82.8,-14.4 95.5,-11.1 108.3,-7.7 121.1,-4.4 133.8,-1.1 146.6,2.3 159.4,5.6 172.1,9.0 184.9,12.3 197.7,15.7 210.4,19.0 223.2,22.3 236.0,25.7 248.7,29.0 261.5,32.4 274.3,35.7 287.0,39.0 299.8,42.4 312.6,45.7 325.3,49.1 338.1,52.4 350.9,55.7 363.6,59.1 376.4,62.4 389.2,65.8 401.9,69.1 414.7,72.5 427.5,75.8 440.2,79.1 453.0,82.5 465.8,85.8 478.5,89.2 491.3,92.5 504.1,95.8 516.8,99.2 529.6,102.5 542.4,105.9 555.1,109.2 567.9,112.6 580.7,115.9 593.4,119.2 606.2,122.6 619.0,125.9 631.7,129.3 644.5,132.6 657.3,135.9 670.0,139.3 682.8,142.6 695.6,146.0 708.3,149.3 721.1,152.7 733.9,156.0 746.6,159.3 759.4,162.7 772.2,166.0 784.9,169.4 797.7,172.7 810.5,176.0 823.2,179.4 836.0,182.7" fill="none" stroke="#8250df" stroke-width="2.2" stroke-dasharray="6 4" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="240.2" cy="206.0" r="6" fill="#1a7f37" stroke="#1a7f37" stroke-width="2"/>
+<text x="251.2" y="210.0" fill="#1f2328" font-size="11">16 KiB, 200 ops/s (4 h, held)</text>
+<circle cx="495.6" cy="170.7" r="6" fill="#1a7f37" stroke="#1a7f37" stroke-width="2"/>
+<text x="495.6" y="158.7" text-anchor="middle" fill="#1f2328" font-size="11">128 KiB, 600 ops/s (4 h)</text>
+<circle cx="662.9" cy="215.2" r="6" fill="#bf8700" stroke="#bf8700" stroke-width="2"/>
+<text x="662.9" y="203.2" text-anchor="middle" fill="#1f2328" font-size="11">500 KiB: ceiling ~150 ops/s</text>
+<circle cx="662.9" cy="154.3" r="6" fill="none" stroke="#cf222e" stroke-width="2"/>
+<text x="673.9" y="158.3" fill="#1f2328" font-size="11">500 KiB, 1000 ops/s target</text>
+</svg>

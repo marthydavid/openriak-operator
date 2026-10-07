@@ -135,6 +135,21 @@ class Build(unittest.TestCase):
             self.assertIn("600 ops/s, 128 KiB objects, 10 users", n["subtitle"])
             self.assertEqual(json.loads(read(os.path.join(out, "numbers.json")))["samples"], 40)
 
+    def test_ramp_up_and_tail_windows_are_left_out_of_the_statistics(self):
+        with tempfile.TemporaryDirectory() as art, tempfile.TemporaryDirectory() as out:
+            write_run(art, n=40, target=600)
+            rows = [json.loads(line) for line in read(os.path.join(art, "samples.jsonl")).splitlines()]
+            rows[1]["sample"]["Rate"] = 60.0    # the first window: clients still connecting
+            rows[-2]["sample"]["Rate"] = 8.0    # the load winding down: two near-idle windows
+            rows[-1]["sample"]["Rate"] = 10.0
+            rows[20]["sample"]["Rate"] = 120.0  # a real stall in the middle must stay visible
+            with open(os.path.join(art, "samples.jsonl"), "w", encoding="utf-8") as f:
+                f.write("".join(json.dumps(r) + "\n" for r in rows))
+            n = sr.build(art, out)
+            self.assertEqual(n["tput_min"], 120.0)
+            self.assertEqual(len(sr.timed_phase(rows)), 36)
+            self.assertEqual(len(sr.timed_phase(rows[:3])), 2, "too few samples to trim anything")
+
     def test_bad_data_shows_in_the_verdict_tile(self):
         with tempfile.TemporaryDirectory() as art, tempfile.TemporaryDirectory() as out:
             write_run(art)
