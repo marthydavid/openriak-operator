@@ -207,12 +207,18 @@ It prints a table per cluster (ops/s, put and get latency p50/p95/p99, errors, l
 `-soak` is a different kind of run: instead of "how fast", it asks "does one cluster hold a
 **constant** load for hours, and what happens to it". It builds one TLS cluster, `-soak-buckets`
 buckets (each with its own bucket type, `n_val` 3, `pr`/`pw` 2) and `-soak-users` certificate users,
-and starts one client per user. Every client rotates over all buckets at its share of `-soak-rate`
-(default 200 ops/s in total, 50% reads, 16 KiB values), sending `pr`/`pw` with every request.
+and starts one client per user. Every client rotates over all buckets at its share of `-soak-rate`,
+sending `pr`/`pw` with every request. A real 4-hour run, with charts, is on the
+[Soak test results](soak-test-results.md) page.
 
 ```bash
-# the defaults: 3 nodes, 300Gi PVC each, 10 buckets, 10 users, 200 ops/s, 4 hours
+# the defaults: 3 nodes, 300Gi PVC each, 10 buckets, 10 users, 200 ops/s of 16 KiB objects, 4 hours
 go run ./test/scale -soak -storage-class lvms-vg1 -operator-namespace openriak-operator -verify-timeout 15m
+
+# a heavier, bigger-object run that keeps everything it measures
+go run ./test/scale -soak -soak-rate 600 -soak-value-size 131072 -soak-keyspace 300 -soak-threads 16 \
+  -soak-cpu 4 -soak-memory 16Gi -soak-max-memory 64Gi -soak-artifacts ./soak-run \
+  -storage-class lvms-vg1 -operator-namespace openriak-operator -timeout 30m -verify-timeout 20m
 
 make soak-test STORAGE_CLASS=lvms-vg1 DURATION=4h
 ```
@@ -220,26 +226,106 @@ make soak-test STORAGE_CLASS=lvms-vg1 DURATION=4h
 A 4-hour run outlives most terminals and tool timeouts: start it detached (`nohup setsid ... > soak.log &`
 on a host close to the cluster) and follow the log.
 
-Every `-soak-check` (30s) the harness samples the pods (restarts, `OOMKilled`), `kubectl top` (memory
-against the limit), the data volumes (`df`), and the clients' own `WINDOW` lines (achieved ops/s,
-failed share, worst p99). A policy acts on that, with a cooldown (`-soak-cooldown`, 20m) between actions:
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `-soak-duration` | `4h` | how long the clients hold the load (then they read every key back) |
+| `-soak-rate` | `200` | operations per second, all clients together |
+| `-soak-users`, `-soak-buckets` | `10`, `10` | users (one client each) and buckets (one bucket type each) |
+| `-soak-threads` | `4` | connections per client |
+| `-soak-value-size` | `16384` | bytes per object |
+| `-soak-read-ratio` | `0.5` | share of operations that are reads |
+| `-soak-keyspace` | `2000` | keys each client thread keeps per bucket; once full, writes overwrite. Live data is users x threads x buckets x keyspace x value-size, before replication |
+| `-soak-nval`, `-soak-pr`, `-soak-pw` | `3`, `2`, `2` | bucket `n_val`; quorums sent with every request and set as bucket defaults |
+| `-soak-storage` | `300Gi` | data volume of each node |
+| `-soak-memory`, `-soak-max-memory` | `4Gi`, `16Gi` | each node's initial memory request and limit, and the most the scaler may raise it to |
+| `-soak-cpu` | `2` | CPU **request** of each Riak node; there is no CPU limit, so a node can use more |
+| `-soak-client-cpu` | `250m` | CPU request of each load client (no limit) |
+| `-soak-replicas`, `-soak-max-replicas` | `3`, `5` | initial and maximum number of nodes |
+| `-soak-pod-anti-affinity` | operator default (`Required`) | `spec.podAntiAffinity` of the cluster; `Preferred`/`None` let it grow past the number of Kubernetes nodes |
+| `-soak-check`, `-soak-window`, `-soak-cooldown` | `30s`, `1m`, `20m` | sample interval, the clients' own reporting interval, minimum time between two scaling actions |
+| `-soak-mem-pressure`, `-soak-p99`, `-soak-min-rate` | `0.85`, `1000`, `0.9` | thresholds the scaler (and the verdict) use |
+| `-soak-max-error-rate` | `0.005` | tolerated share of failed operations |
+| `-soak-max-disk` | `90` | percent: stop the clients and fail when any data volume is fuller than this |
+| `-soak-action-timeout` | `20m` | a scaling action that leaves the cluster not ready this long is **stalled** (a failure) |
+| `-soak-no-scale` | off | only observe, never change the cluster |
+| `-soak-artifacts` | none | directory to save the run's time series, logs and summary to (see below) |
+
+Every `-soak-check` the harness samples the pods (restarts, `OOMKilled`), `kubectl top` (memory against
+the limit), the data volumes (`df`, every minute), and the clients' own `WINDOW` lines (achieved ops/s,
+failed share, worst p99). A policy acts on that, with a cooldown between actions:
 
 | Observation | Action |
 |-------------|--------|
-| a Riak container was `OOMKilled`, or its working set is above `-soak-mem-pressure` (85%) of the limit for 3 samples | raise every node's memory request and limit by 50% (rounded to 256Mi), up to `-soak-max-memory` |
-| memory is already at its cap, or p99 stays above `-soak-p99` / throughput below `-soak-min-rate` for 5 samples | add a node, up to `-soak-max-replicas` **and the number of schedulable Kubernetes nodes** |
+| a Riak container was `OOMKilled`, or its working set is above `-soak-mem-pressure` of the limit for 3 samples | raise every node's memory request and limit by 50% (rounded to 256Mi), up to `-soak-max-memory` |
+| memory is already at its cap, or p99 stays above `-soak-p99` / throughput below `-soak-min-rate` for 5 samples | add a node, up to `-soak-max-replicas` **and, with the default `Required` anti-affinity, the number of schedulable Kubernetes nodes** |
 
-It never scales in, never acts while a node is down or restarting, and reports an action that leaves the
-cluster not ready for `-soak-action-timeout` as **stalled** (a failure). Riak pods carry a required pod
-anti-affinity (one per Kubernetes node), so on a 3-node Kubernetes cluster the scaler can raise memory but
-can never add a 4th Riak node; it knows that and says so at start-up.
+It never scales in, never acts while a node is down or restarting, and reports a stalled action as a
+failure. With the default `Required` anti-affinity a Riak node needs a Kubernetes node of its own, so on
+a 3-node Kubernetes cluster the scaler can raise memory but can never add a 4th Riak node; it knows that
+and says so at start-up. With `-soak-pod-anti-affinity Preferred` it may add nodes, but **extra Riak nodes
+on the same machines add no network or disk bandwidth**, and the rebalancing that follows costs
+throughput: in a smoke run at the network's limit, adding a 4th node lowered throughput while it joined.
+
+**Safety.** Big objects can fill a volume within minutes, so the harness reads `df` every minute and,
+when any data volume passes `-soak-max-disk`, deletes the clients and fails the run with the reason
+rather than let a volume fill.
+
+**Integrity.** Each client remembers what it wrote, and every read is judged against it:
+
+| Result | Meaning | Fails the run |
+|--------|---------|---------------|
+| ok | the expected version was returned | no |
+| `landed` | a write that timed out or failed *did* reach Riak, and a later read returned exactly that version | no: the client did not know the outcome |
+| `lost` | the key was missing | yes |
+| `stale` | an older version than was acknowledged: a lost update | yes |
+| `ahead` | a newer version nobody can account for | yes |
+| `corrupt` | bytes that are not any version the client could have written | yes |
 
 The report gives throughput against the target, latency percentiles, the clients' error breakdown,
-integrity (lost/corrupt values, and a final read of every key), OOM kills and restarts, peak memory and
-disk, warning events and the timeline of actions. The run **fails** on lost or corrupt data, a failed-operation
-share above `-soak-max-error-rate` (0.5%), throughput below `-soak-min-rate` (90%) of the target, a stalled
-action, errors while the cluster was healthy, or a cluster that does not end Ready; it then verifies Riak
-against the CRs as the other modes do.
+integrity (including a final read of every key), OOM kills and restarts, peak memory and disk, warning
+events and the timeline of actions. The run **fails** on lost, stale, unexplained or corrupt data, a
+failed-operation share above `-soak-max-error-rate`, throughput below `-soak-min-rate` of the target, a
+stalled action, errors while the cluster was healthy (restart windows excluded), a data volume past
+`-soak-max-disk`, or a cluster that does not end Ready; it then verifies Riak against the CRs as the other
+modes do.
+
+**What it saves.** With `-soak-artifacts DIR` the run leaves, after the cluster is gone:
+
+| File | Content |
+|------|---------|
+| `samples.jsonl` | one row per sample: cluster state, per-node memory and disk, and **each client's own load** (rate, errors, latency percentiles) |
+| `metrics.jsonl` | every `riak_*` series of every node, once a minute |
+| `nodes.jsonl` | `kubectl top nodes`, once a minute |
+| `logs/` | Riak, exporter and operator logs, Riak's own `error.log`/`crash.log`, the previous container's log after a restart, every client's log, events, pod descriptions, the custom resources |
+| `summary.json` | the verdict, settings, final numbers and the timeline |
+
+`hack/soak-report.py DIR OUT` turns those into the charts on the results page (SVG, light and dark,
+standard library only), and `make test-soak-report` checks the generator.
+
+#### Sizing a load for your network
+
+The limit that decides what a cluster can carry is often the network, not Riak. With `n_val` 3 and quorum
+reads and writes every operation moves several copies of the object between nodes: a write is sent to two
+more nodes, and a read pulls copies from the other replicas. Measured on the test cluster, about **1.04 x
+the object size** crosses each node's NIC, in each direction, per operation:
+
+> per-node network use = 1.04 x ops/s x object size, and it has to stay below what the link really carries
+
+On the test cluster's **1 GbE** links that is about 90 MB/s per direction after overlay overhead, which
+gives (per node, 50% reads):
+
+| Object size | Most ops/s on 1 GbE | At 1,000 ops/s |
+|---|---|---|
+| 500 KiB | about 165 | needs about 530 MB/s per node (4.3 Gbit/s) |
+| 128 KiB | about 650 | about 135 MB/s (over the limit) |
+| 64 KiB | about 1,300 | about 68 MB/s (fits) |
+| 16 KiB | about 5,000 | about 17 MB/s |
+
+Two runs show the model's edges: 500 KiB objects topped out at about 150 ops/s no matter how many
+connections or Riak nodes were used (Riak and the clients were mostly idle; the 1 GbE links were not), and
+128 KiB at 600 ops/s was sustained for 4 hours. See [the capacity chart](soak-test-results.md#what-the-network-allows)
+and check your own NICs before choosing a target: a node's physical NIC speed is in
+`/sys/class/net/<nic>/speed`, and a 10 GbE port that is down does not help.
 
 !!! warning "A 3-node cluster does not survive a node restart with `pr=2` / `pw=2`"
     With only 3 nodes Riak cannot place all three replicas of every partition on different nodes (its
@@ -252,7 +338,7 @@ against the CRs as the other modes do.
 
 The client behind it, `examples/stressapp/riak_stress.py`, also takes `--rate` (constant open-loop rate),
 `--pr`/`--pw`, several buckets (`--bucket a,b,c` with one `--bucket-type` or one per bucket), `--keyspace`
-(bounds the keys each thread keeps, so a long run overwrites instead of growing) and `--window`.
+and `--window`.
 
 ### Verifying Riak metrics
 

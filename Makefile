@@ -246,3 +246,7 @@ soak-test: ## Hold a constant load on one cluster for hours (see docs/scaling.md
 .PHONY: test-stressapp
 test-stressapp: ## Offline unit tests of the example stress client (no Riak needed).
 	python3 -m unittest examples/stressapp/test_riak_stress.py
+
+.PHONY: test-soak-report
+test-soak-report: ## Offline tests of hack/soak-report.py, the chart generator for soak runs.
+	python3 -m unittest hack/test_soak_report.py

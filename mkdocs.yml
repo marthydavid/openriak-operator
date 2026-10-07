@@ -26,7 +26,11 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.highlight
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
 
@@ -51,5 +55,6 @@ nav:
       - Metrics examples: metrics-examples.md
       - Scaling: scaling.md
       - Scale test results: scale-test-results.md
+      - Soak test results: soak-test-results.md
       - Test environment: test-environment.md
       - Troubleshooting: troubleshooting.md

@@ -125,6 +125,14 @@ should return real riak-admin output rather than a Go error to exercise this pat
   missing/deleting/not Ready; gives up after `userDeleteGracePeriod`).
 - `test/scale` verifies Riak against the CRs on every node (`-verify`, `-verify-only`, `-mutate`,
   `-delete-users-every`); see `docs/scaling.md`.
+- `test/scale -soak` (`make soak-test`) holds a constant load for hours, watches for OOM kills, restarts,
+  memory and disk, and scales memory/nodes by a unit-tested policy (`soak_policy.go`). Things learned the
+  hard way: size the load for the **network** first (`1.04 x ops/s x object size` per node must stay under
+  the link, ~90 MB/s on 1 GbE; check `/sys/class/net/*/speed`); load-client and Riak CPU are *requests*, not
+  limits, and a nearly full request budget leaves clients `Pending`; run it detached
+  (`nohup setsid ... > log &`) because a tool or terminal timeout kills a 4 h run; use `-soak-artifacts`
+  to keep the time series and logs, and `hack/soak-report.py` (`make test-soak-report`) to chart them; a
+  write that times out may still land, so the client counts it as `landed`, not `corrupt`.
 
 ## Container Images
 

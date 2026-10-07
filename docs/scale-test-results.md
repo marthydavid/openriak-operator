@@ -18,6 +18,10 @@ from Riak on every node** and compares it with what the custom resources declare
     now fails a run when the operator restarts or is OOMKilled. The numbers below are the clean
     run with the fixed limit.
 
+!!! info "Looking for long runs?"
+    This page is about convergence and correctness. How one cluster behaves under a constant load for
+    **hours**, and what the network allows, is on [Soak test results](soak-test-results.md).
+
 ## Environment
 
 Full details of the cluster (hardware, storage, services, what else runs on it) are on the
