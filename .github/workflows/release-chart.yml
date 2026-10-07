@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - "charts/**"
+      - "config/crd/**"
       - "examples/metrics/grafana-dashboard.json"
       - ".github/workflows/release-chart.yml"
 
@@ -30,6 +31,20 @@ jobs:
 
       - name: Dashboard copy matches the chart's
         run: diff examples/metrics/grafana-dashboard.json charts/openriak-operator/dashboards/riak-kv.json
+
+      - name: CRD copy matches config/crd/bases
+        run: diff -r config/crd/bases charts/openriak-operator/files/crds
+
+      - name: CRDs render, are kept on uninstall and can be switched off
+        run: |
+          rendered=$(helm template smoke charts/openriak-operator)
+          [ "$(grep -c '^kind: CustomResourceDefinition' <<<"$rendered")" = 3 ]
+          [ "$(grep -c 'helm.sh/resource-policy: keep' <<<"$rendered")" = 3 ]
+          rendered=$(helm template smoke charts/openriak-operator --set crds.keep=false)
+          [ "$(grep -c '^kind: CustomResourceDefinition' <<<"$rendered")" = 3 ]
+          [ "$(grep -c 'helm.sh/resource-policy' <<<"$rendered")" = 0 ]
+          rendered=$(helm template smoke charts/openriak-operator --set crds.install=false)
+          [ "$(grep -c '^kind: CustomResourceDefinition' <<<"$rendered" || true)" = 0 ]
 
       - name: Render templates (all toggles flipped)
         run: |

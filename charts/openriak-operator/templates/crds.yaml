@@ -1,0 +1,19 @@
+{{- /*
+The CRDs live in files/crds (a copy of config/crd/bases, kept in sync by `make manifests` and checked
+in CI) rather than in the chart's crds/ directory, because Helm never upgrades crds/.
+Files are not templated, so schema text containing "{{" is safe.
+*/ -}}
+{{- if .Values.crds.install }}
+{{- range $path, $_ := .Files.Glob "files/crds/*.yaml" }}
+{{- $crd := $.Files.Get $path }}
+{{- if $.Values.crds.keep }}
+{{- $kept := regexReplaceAll "(?m)^  annotations:\n" $crd "  annotations:\n    helm.sh/resource-policy: keep\n" }}
+{{- if eq $kept $crd }}
+{{- fail (printf "%s has no metadata.annotations block to add helm.sh/resource-policy to" $path) }}
+{{- end }}
+{{- $crd = $kept }}
+{{- end }}
+{{ $crd | trim }}
+---
+{{- end }}
+{{- end }}
