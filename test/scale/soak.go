@@ -75,6 +75,10 @@ type soakOpts struct {
 	noScale       bool
 	actionTimeout time.Duration
 	memPressure   float64
+	// podAntiAffinity is spec.podAntiAffinity of the cluster; "" keeps the operator's default (Required).
+	podAntiAffinity string
+	clientCPU       string  // CPU request of each load client (no CPU limit)
+	maxDisk         float64 // stop the clients when a data volume is fuller than this percent (0 = never)
 }
 
 func (s soakOpts) perClientRate() float64 { return float64(s.rate) / float64(s.users) }
@@ -95,13 +99,16 @@ func validateSoak(s soakOpts) error {
 		return fmt.Errorf("-soak-replicas must be at least 3 (n_val 3, pw 2) and not above -soak-max-replicas")
 	case s.nVal < 1 || s.pr > s.nVal || s.pw > s.nVal:
 		return fmt.Errorf("-soak-nval %d: pr/pw (%d/%d) cannot exceed it", s.nVal, s.pr, s.pw)
+	case s.podAntiAffinity != "" && s.podAntiAffinity != riakv1.PodAntiAffinityRequired &&
+		s.podAntiAffinity != riakv1.PodAntiAffinityPreferred && s.podAntiAffinity != riakv1.PodAntiAffinityNone:
+		return fmt.Errorf("-soak-pod-anti-affinity %q: must be Required, Preferred or None", s.podAntiAffinity)
 	case s.memPressure <= 0 || s.memPressure > 1:
 		return fmt.Errorf("-soak-mem-pressure %v: must be in (0, 1]", s.memPressure)
 	case s.duration < 2*time.Minute:
 		return fmt.Errorf("-soak-duration must be at least 2m")
 	}
 	parsed := map[string]resource.Quantity{}
-	for _, q := range []string{s.storage, s.memory, s.maxMemory, s.cpu} {
+	for _, q := range []string{s.storage, s.memory, s.maxMemory, s.cpu, s.clientCPU} {
 		v, err := resource.ParseQuantity(q)
 		if err != nil {
 			return fmt.Errorf("invalid quantity %q: %w", q, err)
@@ -132,7 +139,8 @@ func soakCRs(o opts) (*riakv1.RiakCluster, []*riakv1.RiakBucket, []*riakv1.RiakU
 				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(s.cpu), corev1.ResourceMemory: mem},
 				Limits:   corev1.ResourceList{corev1.ResourceMemory: mem},
 			},
-			Monitoring: &riakv1.MonitoringConfig{Enabled: true, ScrapeKind: o.scrapeKind},
+			PodAntiAffinity: s.podAntiAffinity,
+			Monitoring:      &riakv1.MonitoringConfig{Enabled: true, ScrapeKind: o.scrapeKind},
 			TLS: &riakv1.TLSConfig{
 				Enabled:     true,
 				CertManager: &riakv1.CertManagerConfig{IssuerName: "scale-issuer", IssuerKind: "Issuer"},
@@ -217,7 +225,7 @@ func soakJob(o opts, i int) *batchv1.Job {
 					Containers: []corev1.Container{{
 						Name: "soak", Image: o.stressImage, Command: []string{"python3"}, Args: soakClientArgs(o, i),
 						Resources: corev1.ResourceRequirements{
-							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("250m"),
+							Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(o.soak.clientCPU),
 								corev1.ResourceMemory: resource.MustParse("256Mi")},
 							Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
 						},
@@ -274,6 +282,7 @@ type soakState struct {
 	actionAt   time.Time // when the last action was applied
 	actionKind string
 	stalled    bool
+	aborted    string // set when the load was stopped early
 	stalls     []string
 }
 
@@ -421,7 +430,7 @@ func (st *soakState) sampleOnce(ctx context.Context, c client.Client, o opts) (s
 	if n > 0 {
 		s.Rate, s.ErrRate, s.P99 = rate, errRate, p99
 	}
-	if st.tick%10 == 0 { // the data volumes grow slowly
+	if st.tick%2 == 0 { // every minute: big objects can fill a volume within minutes
 		s.DiskPct = st.diskUsage(o.namespace, pods.Items)
 	} else if len(st.hist) > 0 {
 		s.DiskPct = st.hist[len(st.hist)-1].DiskPct
@@ -497,7 +506,7 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 	s := o.soak
 	limit := st.started.Add(s.duration + 70*time.Minute)
 	mem := resource.MustParse(s.maxMemory)
-	maxSize := st.capSize(ctx, c, s.maxReplicas)
+	maxSize := st.capSize(ctx, c, s.maxReplicas, s.podAntiAffinity)
 	st.scaler = soakScaler{policy: soakPolicy{
 		TargetRate: float64(s.rate), MaxMemory: mem, MaxSize: maxSize, Cooldown: s.cooldown,
 		P99Limit: s.p99Limit, MinRateRatio: s.minRateRatio, MaxErrRate: s.maxErrRate,
@@ -518,6 +527,9 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 			}
 			fmt.Println(st.tickLine(o, sample, cl))
 			st.checkStall(sample, s.actionTimeout)
+			if diskTooFull(sample.DiskPct, s.maxDisk) {
+				return st.abortForDisk(ctx, c, o, sample.DiskPct)
+			}
 			if !s.noScale && time.Since(st.started) < s.duration {
 				a := st.scaler.decide(time.Now(), st.hist, memLimit(cl), cl.Spec.Size)
 				if a.Kind != actionNone {
@@ -552,7 +564,10 @@ func monitorSoak(ctx context.Context, c client.Client, o opts, st *soakState) er
 
 // capSize limits how far the cluster may grow: no further than -soak-max-replicas, and no further
 // than there are schedulable Kubernetes nodes, because Riak pods need one node each.
-func (st *soakState) capSize(ctx context.Context, c client.Client, wanted int) int32 {
+func (st *soakState) capSize(ctx context.Context, c client.Client, wanted int, antiAffinity string) int32 {
+	if antiAffinity == riakv1.PodAntiAffinityPreferred || antiAffinity == riakv1.PodAntiAffinityNone {
+		return int32(wanted) // Riak pods may share a Kubernetes node: the node count is no limit
+	}
 	nodes := &corev1.NodeList{}
 	if err := c.List(ctx, nodes); err != nil {
 		fmt.Printf("  could not list the Kubernetes nodes (%v); not limiting the cluster size by them\n", err)
@@ -565,6 +580,21 @@ func (st *soakState) capSize(ctx context.Context, c client.Client, wanted int) i
 			"and a Riak node needs one each\n", size, n)
 	}
 	return int32(size)
+}
+
+// diskTooFull reports whether the fullest data volume is past the limit (0 disables the check).
+func diskTooFull(pct, limit float64) bool { return limit > 0 && pct >= limit }
+
+// abortForDisk stops the load: a full data volume would damage the cluster, not test it.
+func (st *soakState) abortForDisk(ctx context.Context, c client.Client, o opts, pct float64) error {
+	st.note("ABORT: a data volume is %.1f%% full (limit %.0f%%); stopping the clients", pct, o.soak.maxDisk)
+	prop := metav1.DeletePropagationBackground
+	for i := 0; i < o.soak.users; i++ {
+		_ = c.Delete(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: soakJobName(i), Namespace: o.namespace}},
+			&client.DeleteOptions{PropagationPolicy: &prop})
+	}
+	st.aborted = fmt.Sprintf("stopped early: a data volume reached %.1f%% (limit %.0f%%)", pct, o.soak.maxDisk)
+	return fmt.Errorf("%s", st.aborted)
 }
 
 // checkStall notes an action that left the cluster not ready for too long, once.

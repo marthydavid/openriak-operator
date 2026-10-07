@@ -145,6 +145,13 @@ func main() {
 		"a scaling action that leaves the cluster not ready this long is reported as stalled")
 	flag.Float64Var(&o.soak.memPressure, "soak-mem-pressure", 0.85,
 		"working set / memory limit above this for 3 samples raises the memory limit")
+	flag.StringVar(&o.soak.podAntiAffinity, "soak-pod-anti-affinity", "",
+		"spec.podAntiAffinity of the cluster: Required (the operator's default), Preferred or None; "+
+			"Preferred/None let the cluster grow past the number of Kubernetes nodes")
+	flag.Float64Var(&o.soak.maxDisk, "soak-max-disk", 90,
+		"percent: stop the clients and fail when any data volume is fuller than this (0 = never)")
+	flag.StringVar(&o.soak.clientCPU, "soak-client-cpu", "250m",
+		"CPU request of each load client (no CPU limit): big objects need more")
 	flag.BoolVar(&o.soak.noScale, "soak-no-scale", false, "only observe: never change the cluster")
 	flag.BoolVar(&o.verify, "verify", true, "after convergence, check that what Riak holds equals what the CRs declare")
 	flag.BoolVar(&o.verifyOnly, "verify-only", false, "only verify an existing namespace; create nothing")
