@@ -13,6 +13,15 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# The RiakCluster, RiakUser and RiakBucket CRDs are rendered from the chart's templates, so
+# `helm upgrade` updates them.
+crds:
+  # Set to false when the CRDs are managed outside the release (GitOps, a cluster admin).
+  install: true
+  # Annotate the CRDs with helm.sh/resource-policy: keep so `helm uninstall` leaves them, and
+  # every RiakCluster, RiakUser and RiakBucket, in place.
+  keep: true
+
 riak:
   # Default operand image used when a RiakCluster omits spec.image
   # (passed to the operator as --riak-image).

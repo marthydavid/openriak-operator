@@ -53,15 +53,36 @@ helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operato
   --namespace openriak-system
 ```
 
-**CRDs are not upgraded by Helm.** The `crds/` directory is applied on first install only. When a release
-changes a CRD, apply the new schemas yourself with server-side apply (they are large):
+The chart renders the CRDs from its templates, so `helm upgrade` updates them together with the
+operator (`crds.install`, default `true`). If you manage the CRDs yourself (GitOps, a cluster admin), set
+`crds.install=false` and apply `config/crd/bases` from the matching operator tag before each upgrade, with
+`kubectl apply --server-side` because the schemas are large.
+
+### Upgrading from an earlier chart
+
+Earlier charts shipped the CRDs in a `crds/` directory, which Helm applies once and then does not own.
+The first upgrade to a chart that renders them has to adopt the existing CRDs, otherwise Helm refuses
+with `exists and cannot be imported into the current release`. Pick one:
+
+```bash
+# Helm 3.17 or later
+helm upgrade openriak-operator oci://ghcr.io/marthydavid/charts/openriak-operator \
+  --namespace openriak-system --take-ownership
+```
+
+or label and annotate the CRDs for the release first (any Helm 3), then run the normal upgrade:
 
 ```bash
 for crd in riakclusters riakusers riakbuckets; do
-  kubectl apply --server-side -f \
-    https://raw.githubusercontent.com/marthydavid/openriak-operator/main/config/crd/bases/riak.openriak.io_$crd.yaml
+  kubectl label crd $crd.riak.openriak.io app.kubernetes.io/managed-by=Helm --overwrite
+  kubectl annotate crd $crd.riak.openriak.io \
+    meta.helm.sh/release-name=openriak-operator \
+    meta.helm.sh/release-namespace=openriak-system --overwrite
 done
 ```
+
+Adoption does not touch the stored RiakClusters, RiakUsers or RiakBuckets. Use your own release name and
+namespace if they differ.
 
 Check the [release notes](https://github.com/marthydavid/openriak-operator/blob/main/docs/release-notes.md)
 before upgrading: some releases restart existing RiakClusters once (one pod at a time).
@@ -72,7 +93,9 @@ before upgrading: some releases restart existing RiakClusters once (one pod at a
 helm uninstall openriak-operator --namespace openriak-system
 ```
 
-This leaves the CRDs and every RiakCluster, RiakBucket and RiakUser (and their data volumes) in place.
+This leaves the CRDs and every RiakCluster, RiakBucket and RiakUser (and their data volumes) in place,
+because the CRDs carry `helm.sh/resource-policy: keep` (`crds.keep`, default `true`). With `crds.keep=false`,
+uninstalling **deletes the CRDs and with them every Riak resource**.
 Delete the Riak resources first if you want them gone, then remove the CRDs by hand
 (`kubectl delete crd riakclusters.riak.openriak.io riakusers.riak.openriak.io riakbuckets.riak.openriak.io`).
 
@@ -92,6 +115,8 @@ Delete the Riak resources first if you want them gone, then remove the CRDs by h
 | `metrics.enabled` | `true` | Serve authenticated metrics on `:8443`, with a Service and token-review RBAC |
 | `metrics.serviceMonitor.enabled` | `false` | Create a `ServiceMonitor` for the operator (needs Prometheus Operator CRDs) |
 | `metrics.serviceMonitor.tlsConfig` | `insecureSkipVerify: true` | Scrape TLS settings. The manager serves a self-signed certificate, so verification is skipped by default; set `insecureSkipVerify: false` explicitly and add `caFile`/`serverName` if you issue a real certificate |
+| `crds.install` | `true` | Render the three CRDs from the chart so `helm upgrade` updates them; `false` when you manage them yourself |
+| `crds.keep` | `true` | Add `helm.sh/resource-policy: keep` to the CRDs so `helm uninstall` does not delete them (and every Riak resource) |
 | `dashboard.enabled` | `false` | Ship the Riak KV Grafana dashboard as a ConfigMap for Grafana's dashboard sidecar |
 | `dashboard.namespace` | release namespace | Namespace of the dashboard ConfigMap; set to Grafana's namespace if the sidecar watches only one |
 | `dashboard.labels` | `grafana_dashboard: "1"` | Labels the sidecar selects on |
