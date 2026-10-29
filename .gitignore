@@ -35,3 +35,6 @@ __pycache__/
 
 # `go build ./test/scale` (no -o) drops the harness binary here; build with -o instead
 /scale
+
+# graphify knowledge graph (rebuilt locally from code: `make graph`)
+graphify-out/
