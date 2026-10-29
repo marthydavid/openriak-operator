@@ -94,6 +94,22 @@ type RiakClusterSpec struct {
 	// +kubebuilder:default=Required
 	// +optional
 	PodAntiAffinity string `json:"podAntiAffinity,omitempty"`
+
+	// PodSecurityContext is applied to the generated Riak pods. Leave it unset to keep the
+	// image's own user and the volume's ownership as they are. A freshly provisioned PVC replaces
+	// the image's /var/lib/riak, so a non-root image needs an fsGroup it can write through (the
+	// group must match the image and the storage driver; there is no universal value).
+	// +optional
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+
+	// ReadOnlyRootFilesystem makes the root filesystem of the Riak container read-only. The
+	// paths Riak writes outside the data volume (/etc/riak, /var/log/riak, /var/run/riak, /tmp)
+	// become emptyDir volumes, and an init container seeds /etc/riak from the image. Log files and
+	// the generated riak.conf are then lost when a pod restarts, which is fine: the entrypoint
+	// regenerates riak.conf and the console log is on the container's stdout. Off by default;
+	// enabling it on an existing cluster rolls the pods once.
+	// +optional
+	ReadOnlyRootFilesystem bool `json:"readOnlyRootFilesystem,omitempty"`
 }
 
 // Pod anti-affinity modes for RiakClusterSpec.PodAntiAffinity.

@@ -83,6 +83,83 @@ spec:
 | `servicePort` | int, 1024–65535 | `8087` | Port of the protobuf service |
 | `nodeSelector` | map | — | Restrict nodes the pods can schedule on |
 | `podAntiAffinity` | `Required` \| `Preferred` \| `None` | `Required` | How Riak pods spread over Kubernetes nodes; see [below](#running-more-riak-nodes-than-kubernetes-nodes) |
+| `readOnlyRootFilesystem` | bool | `false` | Read-only root filesystem for the Riak container, with `emptyDir` scratch volumes; see [below](#readonlyrootfilesystem) |
+| `podSecurityContext` | Kubernetes `PodSecurityContext` | seccomp `RuntimeDefault` only | Pod security context of the Riak pods, mainly `fsGroup` for a fresh PVC; see [Pod security](#pod-security-and-volume-ownership) |
+
+## Pod security and volume ownership
+
+A freshly provisioned PVC replaces the image's `/var/lib/riak`, so the Riak user must be able to
+write to the volume. Without that the pod fails at startup with
+`cp: cannot create regular file '/var/lib/riak/sys.config': Permission denied`.
+
+What the operator always sets on the Riak pods (no UID, GID or `fsGroup`, so it works on every
+platform): pod `seccompProfile: RuntimeDefault`, and on the Riak container
+`allowPrivilegeEscalation: false` and `capabilities.drop: [ALL]`. Riak never runs privileged or as root.
+
+`spec.podSecurityContext` is merged in as the pod security context; use it for `fsGroup`:
+
+| Platform | What to set |
+|----------|-------------|
+| **OpenShift / OKD** (`restricted-v2`) | **Nothing.** The SCC assigns a UID and an `fsGroup` from the namespace range. A fixed `fsGroup` or `runAsUser` outside that range is not allowed by `restricted-v2` for ordinary service accounts (needs another SCC). |
+| **AKS** (Azure Disk CSI, `managed-csi`) | `fsGroup: <riak gid>`. Azure Disk honours `fsGroup`. Azure Files ignores it: use a StorageClass with `uid=`/`gid=` mount options. |
+| **RKE2 / k3s** | Rancher `local-path` (the default) creates world-writable volumes, so a fresh PVC works with no `fsGroup`; setting one is honoured and harmless. For CSI drivers (Longhorn, Ceph, ...) set `fsGroup: <riak gid>`. |
+| **Other (EKS, GKE, kind, ...)** | `fsGroup: <riak gid>` when the driver advertises `fsGroupPolicy: File` or `ReadWriteOnceWithFSType`. |
+
+The group is that of the `riak` user in the image you run. It is not the same for every base, so
+read it from the image instead of guessing:
+
+```bash
+kubectl run riak-id --rm -it --restart=Never --image=ghcr.io/marthydavid/riak:3.2.6 --command -- id riak
+```
+
+```yaml
+spec:
+  podSecurityContext:
+    fsGroup: <gid from above>
+    fsGroupChangePolicy: OnRootMismatch   # skips the recursive chown on restarts of big volumes
+```
+
+For namespaces enforcing the Pod Security `restricted` level, also set a numeric non-root user,
+because the image's `USER riak` is a name and the kubelet cannot verify a name for `runAsNonRoot`:
+`runAsNonRoot: true`, `runAsUser: <uid of riak>`, `runAsGroup`/`fsGroup: <gid>`. This is not the
+default because it would break OpenShift's UID assignment.
+
+### `readOnlyRootFilesystem`
+
+Off by default, because it changes where Riak writes and rolls the pods once. Set
+`spec.readOnlyRootFilesystem: true` to make the Riak container's root filesystem read-only. Riak
+writes `/etc/riak/riak.conf`, `/var/log/riak`, `/var/run/riak` and `/tmp` outside the data volume, so the
+operator then mounts those four as `emptyDir` volumes and adds an init container (`seed-etc-riak`, same
+image, also read-only and unprivileged) that copies the image's `/etc/riak` defaults into the
+`/etc/riak` volume, since mounting over it would hide them. Riak data stays on the PVC.
+
+Consequences: the generated `riak.conf` and the files in `/var/log/riak` do not survive a pod restart.
+The entrypoint regenerates the config at every start and the console log goes to the container's stdout,
+so nothing is lost that Riak needs. Do not enable it through an admission policy that mutates the pod
+instead of this field: without the scratch volumes Riak will not start.
+
+Tested as a plain pod with exactly these mounts (not yet through the operator, and not with `spec.tls`) on
+OpenShift/OKD 4 (`restricted-v2`, LVMS), k3s 1.35 (`local-path`) and Kubernetes 1.37 (kind): it started,
+wrote its data directories to the PVC and rejected a write to `/usr` ("Read-only file system"). AKS and
+RKE2 with a CSI class were not run.
+
+!!! success "Verified"
+    Each run was a Riak 3.2.6 pod with exactly the security settings above on a fresh PVC; Riak started
+    and wrote to `/var/lib/riak`.
+
+    | Platform | Storage | Result |
+    |----------|---------|--------|
+    | OpenShift/OKD 4 (Kubernetes 1.35, `restricted-v2`) | LVMS | Works with no `podSecurityContext`; the SCC assigned UID and `fsGroup` |
+    | k3s 1.35 (the RKE2 family), amd64 | `local-path` | Works with and without `fsGroup` (996 here) |
+    | Kubernetes 1.37 (kind), arm64 | `local-path` | Works with and without `fsGroup` (999 here; it was not applied) |
+    | Kubernetes 1.37 (kind), arm64 | `local` PV on a root-owned `0755` directory (what a CSI block volume looks like) | **Without `fsGroup`: Riak exits during startup** (`Cuttlefish failed`, `ERROR: Riak exited during startup`). **With `fsGroup: 999`: starts**; the kubelet made the volume `root:riak` setgid |
+
+    The `riak` group differs by image build (996 vs 999 above), so always read it from your image.
+    To check your own platform or StorageClass, run `hack/verify-fsgroup.sh --context <ctx> --storage-class <sc>`
+    (add `--openshift` on OpenShift); it creates and removes a throwaway namespace.
+    `local-path` creates world-writable volumes, so those runs do not need `fsGroup`; the `local` PV row is
+    the one that reproduces the failure and its fix. **AKS was not run:** its `fsGroup` guidance is
+    documented from how Azure Disk and the kubelet behave, not from a cluster.
 
 ## Storage
 

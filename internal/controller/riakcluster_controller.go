@@ -304,7 +304,14 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 		resources = cluster.Spec.Resources
 	}
 
-	volumeMounts := append([]corev1.VolumeMount{{Name: "data", MountPath: "/var/lib/riak"}}, extraVolumeMounts...)
+	// The scratch mounts go before the extra ones: TLS secrets may be mounted below /etc/riak.
+	volumeMounts := []corev1.VolumeMount{{Name: "data", MountPath: "/var/lib/riak"}}
+	if cluster.Spec.ReadOnlyRootFilesystem {
+		for _, w := range readOnlyScratchPaths {
+			volumeMounts = append(volumeMounts, corev1.VolumeMount{Name: w.volume, MountPath: w.path})
+		}
+	}
+	volumeMounts = append(volumeMounts, extraVolumeMounts...)
 
 	containerPorts := []corev1.ContainerPort{
 		{Name: "protobuf", ContainerPort: 8087},
@@ -328,6 +335,17 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 			Name:         "data",
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
+	}
+
+	var initContainers []corev1.Container
+	if cluster.Spec.ReadOnlyRootFilesystem {
+		for _, w := range readOnlyScratchPaths {
+			podVolumes = append(podVolumes, corev1.Volume{
+				Name:         w.volume,
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			})
+		}
+		initContainers = []corev1.Container{seedEtcRiakContainer(image, pullPolicy)}
 	}
 
 	sts := &appsv1.StatefulSet{
@@ -395,8 +413,10 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 					},
 				},
 				Spec: corev1.PodSpec{
-					NodeSelector: cluster.Spec.NodeSelector,
-					Volumes:      podVolumes,
+					NodeSelector:    cluster.Spec.NodeSelector,
+					SecurityContext: riakPodSecurityContext(cluster),
+					Volumes:         podVolumes,
+					InitContainers:  initContainers,
 					Containers: append([]corev1.Container{
 						{
 							Name:            "riak",
@@ -415,7 +435,8 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 								Requests: resources.Requests,
 								Limits:   resources.Limits,
 							},
-							VolumeMounts: volumeMounts,
+							VolumeMounts:    volumeMounts,
+							SecurityContext: riakContainerSecurityContext(cluster.Spec.ReadOnlyRootFilesystem),
 							// Probe the protobuf listener with a TCP check rather than
 							// `riak ping` / `riak-admin status`: those each spawn a full
 							// temporary Erlang VM per invocation, so running them every few
@@ -464,6 +485,60 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 	}
 
 	return nil
+}
+
+// riakPodSecurityContext returns the pod security context of the Riak pods: spec.podSecurityContext
+// with the runtime-default seccomp profile filled in when the user did not pick one. It never sets
+// a UID, GID or fsGroup, so OpenShift's restricted-v2 SCC can still assign them from the
+// namespace range (a fixed value outside that range is rejected there); on other platforms the
+// user sets fsGroup through spec.podSecurityContext.
+func riakPodSecurityContext(cluster *riakv1.RiakCluster) *corev1.PodSecurityContext {
+	sc := cluster.Spec.PodSecurityContext.DeepCopy()
+	if sc == nil {
+		sc = &corev1.PodSecurityContext{}
+	}
+	if sc.SeccompProfile == nil {
+		sc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	}
+	return sc
+}
+
+// readOnlyScratchPaths are the paths Riak writes outside the data volume. With
+// spec.readOnlyRootFilesystem each becomes an emptyDir; /etc/riak is seeded by an init container
+// because mounting over it hides the image's defaults (advanced.config, riak.conf).
+var readOnlyScratchPaths = []struct{ volume, path string }{
+	{"riak-etc", "/etc/riak"},
+	{"riak-log", "/var/log/riak"},
+	{"riak-run", "/var/run/riak"},
+	{"riak-tmp", "/tmp"},
+}
+
+// seedEtcRiakContainer copies the image's /etc/riak into the emptyDir that replaces it. A plain
+// recursive copy: preserving times fails on the mount root as a non-root user.
+func seedEtcRiakContainer(image string, pullPolicy corev1.PullPolicy) corev1.Container {
+	return corev1.Container{
+		Name:            "seed-etc-riak",
+		Image:           image,
+		ImagePullPolicy: pullPolicy,
+		Command:         []string{"sh", "-c", "cp -R /etc/riak/. /seed/"},
+		SecurityContext: riakContainerSecurityContext(true),
+		VolumeMounts:    []corev1.VolumeMount{{Name: "riak-etc", MountPath: "/seed"}},
+	}
+}
+
+// riakContainerSecurityContext is the hardening applied to the Riak container on every platform:
+// no privilege escalation and no Linux capabilities, plus a read-only root filesystem when
+// spec.readOnlyRootFilesystem asks for it (off by default: the entrypoint writes /etc/riak/riak.conf,
+// /var/log/riak, /var/run/riak and /tmp, which then need the emptyDirs above).
+func riakContainerSecurityContext(readOnlyRoot bool) *corev1.SecurityContext {
+	sc := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr(false),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+	if readOnlyRoot {
+		sc.ReadOnlyRootFilesystem = ptr(true)
+	}
+	return sc
 }
 
 // riakAffinity builds the pod affinity of the Riak pods from spec.podAntiAffinity: Required (the

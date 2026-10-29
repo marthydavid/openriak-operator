@@ -12,6 +12,14 @@ Applies to upstream Kubernetes 1.24+ and distributions such as kind, minikube, k
 | Nodes | At least `spec.size` schedulable nodes (required hostname anti-affinity) |
 | Registry access | `ghcr.io/marthydavid/*`; set `imagePullSecrets` on the operator chart or mirror the images and use `--riak-image` |
 
+## Volume ownership (AKS, RKE2, others)
+
+On a fresh PVC the non-root Riak user needs a group it can write through. Set
+`spec.podSecurityContext.fsGroup` (and usually `fsGroupChangePolicy: OnRootMismatch`) to the `riak`
+group of your image; per-platform values and caveats are in
+[Pod security and volume ownership](../crds/riakcluster.md#pod-security-and-volume-ownership).
+Without it, pods fail with `Permission denied` on `/var/lib/riak/sys.config`.
+
 ## Operator permissions
 
 The operator's ClusterRole covers its three CRDs (+ status/finalizers), StatefulSets, Services,
