@@ -1101,15 +1101,52 @@ var _ = Describe("RiakCluster Controller", func() {
 			return sts.Spec.Template.Spec.SecurityContext
 		}
 
-		It("leaves the pod security context unset by default", func() {
+		It("sets only platform-neutral hardening by default", func() {
 			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
 				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
 			})).To(Succeed())
 			_, err := reconcileCluster(ctx, clusterName, ns)
 			Expect(err).NotTo(HaveOccurred())
-			// The API server defaults an empty pod securityContext to {}; nothing may be set in it.
-			Expect(podSC()).To(Or(BeNil(), Equal(&corev1.PodSecurityContext{})))
+			// Hardened but platform-neutral: no UID, GID or fsGroup (OpenShift's SCC assigns them).
+			sc := podSC()
+			Expect(sc.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
+			Expect(sc.FSGroup).To(BeNil())
+			Expect(sc.RunAsUser).To(BeNil())
+			Expect(sc.RunAsGroup).To(BeNil())
+			Expect(sc.RunAsNonRoot).To(BeNil())
+		})
+
+		It("hardens the Riak container without needing a fixed UID or a writable-root change", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
+			})).To(Succeed())
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			csc := sts.Spec.Template.Spec.Containers[0].SecurityContext
+			Expect(csc.AllowPrivilegeEscalation).To(HaveValue(BeFalse()))
+			Expect(csc.Capabilities.Drop).To(ConsistOf(corev1.Capability("ALL")))
+			Expect(csc.Privileged).To(BeNil())
+			Expect(csc.RunAsUser).To(BeNil())
+			Expect(csc.ReadOnlyRootFilesystem).To(BeNil(), "the entrypoint writes outside the PVC")
+		})
+
+		It("keeps a seccomp profile the user chose", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec: riakv1.RiakClusterSpec{
+					Size: 1, Image: "basho/riak-kv:latest",
+					PodSecurityContext: &corev1.PodSecurityContext{
+						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
+					},
+				},
+			})).To(Succeed())
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(podSC().SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeUnconfined))
 		})
 
 		It("propagates fsGroup and fsGroupChangePolicy, and follows later changes", func() {

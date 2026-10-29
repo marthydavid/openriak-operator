@@ -396,7 +396,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 				},
 				Spec: corev1.PodSpec{
 					NodeSelector:    cluster.Spec.NodeSelector,
-					SecurityContext: cluster.Spec.PodSecurityContext,
+					SecurityContext: riakPodSecurityContext(cluster),
 					Volumes:         podVolumes,
 					Containers: append([]corev1.Container{
 						{
@@ -416,7 +416,8 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 								Requests: resources.Requests,
 								Limits:   resources.Limits,
 							},
-							VolumeMounts: volumeMounts,
+							VolumeMounts:    volumeMounts,
+							SecurityContext: riakContainerSecurityContext(),
 							// Probe the protobuf listener with a TCP check rather than
 							// `riak ping` / `riak-admin status`: those each spawn a full
 							// temporary Erlang VM per invocation, so running them every few
@@ -465,6 +466,32 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 	}
 
 	return nil
+}
+
+// riakPodSecurityContext returns the pod security context of the Riak pods: spec.podSecurityContext
+// with the runtime-default seccomp profile filled in when the user did not pick one. It never sets
+// a UID, GID or fsGroup, so OpenShift's restricted-v2 SCC can still assign them from the
+// namespace range (a fixed value outside that range is rejected there); on other platforms the
+// user sets fsGroup through spec.podSecurityContext.
+func riakPodSecurityContext(cluster *riakv1.RiakCluster) *corev1.PodSecurityContext {
+	sc := cluster.Spec.PodSecurityContext.DeepCopy()
+	if sc == nil {
+		sc = &corev1.PodSecurityContext{}
+	}
+	if sc.SeccompProfile == nil {
+		sc.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	}
+	return sc
+}
+
+// riakContainerSecurityContext is the hardening applied to the Riak container on every platform:
+// no privilege escalation and no Linux capabilities. readOnlyRootFilesystem is deliberately not
+// set: the entrypoint writes /etc/riak/riak.conf, /var/log/riak, /var/run/riak and /tmp.
+func riakContainerSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr(false),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
 }
 
 // riakAffinity builds the pod affinity of the Riak pods from spec.podAntiAffinity: Required (the
