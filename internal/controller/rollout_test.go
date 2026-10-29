@@ -134,7 +134,7 @@ var _ = Describe("rolling update of a RiakCluster", func() {
 				return out, nil
 			case strings.HasSuffix(joined, "transfers"):
 				if transfersIdle {
-					return "No transfers active", nil
+					return "No transfers active\n\nActive Transfers:\n\n\nok", nil
 				}
 				return "'riak@x' waiting to handoff 4 partitions\n\nActive Transfers:\n", nil
 			}

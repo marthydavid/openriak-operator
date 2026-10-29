@@ -734,11 +734,14 @@ func TestParseTransfersIdle(t *testing.T) {
 		out  string
 		idle bool
 	}{
-		{"idle", "No transfers active", true},
-		{"idle with trailing newline", "No transfers active\n", true},
+		// Captured from a real node (Riak 3.2.6): the Active Transfers header is always printed.
+		{"idle as printed by a real node", "No transfers active\n\nActive Transfers:\n\n\nok\n", true},
+		{"idle, trimmed", "No transfers active\n\nActive Transfers:\n\n\nok", true},
+		{"idle without the header", "No transfers active", true},
 		{"pending handoff", "'riak@n1' waiting to handoff 3 partitions\n", false},
-		{"active transfer", "Active Transfers:\n\ntransfer type: ownership_handoff\nvnode type: riak_kv_vnode\n", false},
-		{"pending even if the idle line is also printed", "No transfers active\n'riak@n1' waiting to handoff 1 partitions", false},
+		{"pending handoff next to the idle line", "No transfers active\n'riak@n1' waiting to handoff 1 partitions", false},
+		{"active transfer under the header", "Active Transfers:\n\ntransfer type: ownership_handoff\nvnode type: riak_kv_vnode\n\nok", false},
+		{"entry under the header even with the idle line", "No transfers active\n\nActive Transfers:\n\npartition: 1234\n\nok", false},
 		{"empty output is not proof of idleness", "", false},
 		{"unrecognised output is not proof of idleness", "something else", false},
 	}

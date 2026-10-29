@@ -204,17 +204,35 @@ func (e *Executor) TransfersIdle(ctx context.Context, namespace, podName, contai
 	return parseTransfersIdle(out), compactOutput(out), nil
 }
 
-// parseTransfersIdle recognises the two shapes of `riak-admin transfers`: "No transfers active"
-// when nothing is moving, and otherwise lines such as "'riak@n1' waiting to handoff 3 partitions"
-// and an "Active Transfers:" section.
+// parseTransfersIdle recognises the shapes of `riak-admin transfers`. Idle, as printed by a real
+// node, is
+//
+//	No transfers active
+//
+//	Active Transfers:
+//
+//	ok
+//
+// i.e. the "Active Transfers:" header is always there and only what follows it tells. When data
+// is moving there are "'riak@n1' waiting to handoff 3 partitions" lines and transfer entries
+// ("transfer type: ownership_handoff", ...) under the header. Anything that is not clearly idle
+// counts as busy.
 func parseTransfersIdle(out string) bool {
 	lower := strings.ToLower(out)
-	if strings.Contains(lower, "waiting to handoff") ||
-		strings.Contains(lower, "active transfers:") ||
-		strings.Contains(lower, "transfer type") {
+	if strings.Contains(lower, "waiting to handoff") || !strings.Contains(lower, "no transfers active") {
 		return false
 	}
-	return strings.Contains(lower, "no transfers active")
+	inActive := false
+	for _, line := range strings.Split(lower, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "active transfers:":
+			inActive = true
+		case inActive && line != "" && line != "ok":
+			return false
+		}
+	}
+	return true
 }
 
 // JoinCluster stages a join of podName's node into the ring that contains
