@@ -603,5 +603,5 @@ For issues, questions, or feature requests:
 - [x] TLS/cert-manager integration (server TLS + mTLS client-certificate user auth)
 - [ ] Automated backups
 - [x] Cluster monitoring and metrics
-- [ ] Helm chart
+- [x] Helm chart
 - [ ] Multi-datacenter support
