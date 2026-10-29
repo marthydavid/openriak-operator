@@ -83,6 +83,7 @@ spec:
 | `servicePort` | int, 1024–65535 | `8087` | Port of the protobuf service |
 | `nodeSelector` | map | — | Restrict nodes the pods can schedule on |
 | `podAntiAffinity` | `Required` \| `Preferred` \| `None` | `Required` | How Riak pods spread over Kubernetes nodes; see [below](#running-more-riak-nodes-than-kubernetes-nodes) |
+| `readOnlyRootFilesystem` | bool | `false` | Read-only root filesystem for the Riak container, with `emptyDir` scratch volumes; see [below](#readonlyrootfilesystem) |
 | `podSecurityContext` | Kubernetes `PodSecurityContext` | seccomp `RuntimeDefault` only | Pod security context of the Riak pods, mainly `fsGroup` for a fresh PVC; see [Pod security](#pod-security-and-volume-ownership) |
 
 ## Pod security and volume ownership
@@ -123,14 +124,22 @@ because the image's `USER riak` is a name and the kubelet cannot verify a name f
 `runAsNonRoot: true`, `runAsUser: <uid of riak>`, `runAsGroup`/`fsGroup: <gid>`. This is not the
 default because it would break OpenShift's UID assignment.
 
-!!! note "`readOnlyRootFilesystem` is not enabled"
-    The container root filesystem stays writable. The entrypoint writes `/etc/riak/riak.conf`, and
-    Riak writes `/var/log/riak`, `/var/run/riak` and `/tmp`, none of which is on the PVC. Setting it
-    read-only needs `emptyDir` mounts for those paths plus a copy of the image's `/etc/riak`
-    defaults into the `/etc/riak` mount, which the operator does not do yet and which has not been
-    tested. Until then, rely on the dropped capabilities, no privilege escalation and the seccomp
-    profile above, and do not set `readOnlyRootFilesystem: true` through other means (for example a
-    policy mutating the pod): Riak will not start.
+### `readOnlyRootFilesystem`
+
+Off by default, because it changes where Riak writes and rolls the pods once. Set
+`spec.readOnlyRootFilesystem: true` to make the Riak container's root filesystem read-only. Riak
+writes `/etc/riak/riak.conf`, `/var/log/riak`, `/var/run/riak` and `/tmp` outside the data volume, so the
+operator then mounts those four as `emptyDir` volumes and adds an init container (`seed-etc-riak`, same
+image, also read-only and unprivileged) that copies the image's `/etc/riak` defaults into the
+`/etc/riak` volume, since mounting over it would hide them. Riak data stays on the PVC.
+
+Consequences: the generated `riak.conf` and the files in `/var/log/riak` do not survive a pod restart.
+The entrypoint regenerates the config at every start and the console log goes to the container's stdout,
+so nothing is lost that Riak needs. Do not enable it through an admission policy that mutates the pod
+instead of this field: without the scratch volumes Riak will not start.
+
+Tested on Kubernetes 1.37 (kind): a pod with exactly these mounts started, wrote its data directories to
+the PVC and rejected a write to `/usr` ("Read-only file system"). Not yet run on OpenShift, AKS or RKE2.
 
 !!! success "Verified"
     Each run was a Riak 3.2.6 pod with exactly the security settings above on a fresh PVC; Riak started

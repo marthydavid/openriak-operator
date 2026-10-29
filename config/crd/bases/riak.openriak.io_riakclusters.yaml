@@ -389,6 +389,15 @@ spec:
                         type: string
                     type: object
                 type: object
+              readOnlyRootFilesystem:
+                description: |-
+                  ReadOnlyRootFilesystem makes the root filesystem of the Riak container read-only. The
+                  paths Riak writes outside the data volume (/etc/riak, /var/log/riak, /var/run/riak, /tmp)
+                  become emptyDir volumes, and an init container seeds /etc/riak from the image. Log files and
+                  the generated riak.conf are then lost when a pod restarts, which is fine: the entrypoint
+                  regenerates riak.conf and the console log is on the container's stdout. Off by default;
+                  enabling it on an existing cluster rolls the pods once.
+                type: boolean
               resources:
                 description: Resources specifies compute resources for each Riak node.
                 properties:

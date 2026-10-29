@@ -1134,6 +1134,38 @@ var _ = Describe("RiakCluster Controller", func() {
 			Expect(csc.ReadOnlyRootFilesystem).To(BeNil(), "the entrypoint writes outside the PVC")
 		})
 
+		It("makes the root filesystem read-only with scratch emptyDirs when asked", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest", ReadOnlyRootFilesystem: true},
+			})).To(Succeed())
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			spec := sts.Spec.Template.Spec
+			Expect(spec.Containers[0].SecurityContext.ReadOnlyRootFilesystem).To(HaveValue(BeTrue()))
+			mounts := map[string]string{}
+			for _, m := range spec.Containers[0].VolumeMounts {
+				mounts[m.MountPath] = m.Name
+			}
+			Expect(mounts).To(HaveKeyWithValue("/etc/riak", "riak-etc"))
+			Expect(mounts).To(HaveKeyWithValue("/var/log/riak", "riak-log"))
+			Expect(mounts).To(HaveKeyWithValue("/var/run/riak", "riak-run"))
+			Expect(mounts).To(HaveKeyWithValue("/tmp", "riak-tmp"))
+			Expect(mounts).To(HaveKeyWithValue("/var/lib/riak", "data"))
+			vols := map[string]bool{}
+			for _, v := range spec.Volumes {
+				vols[v.Name] = v.EmptyDir != nil
+			}
+			for _, n := range []string{"riak-etc", "riak-log", "riak-run", "riak-tmp"} {
+				Expect(vols).To(HaveKeyWithValue(n, true))
+			}
+			Expect(spec.InitContainers).To(HaveLen(1))
+			Expect(spec.InitContainers[0].Command[2]).To(ContainSubstring("cp -R /etc/riak/. /seed/"))
+			Expect(spec.InitContainers[0].SecurityContext.ReadOnlyRootFilesystem).To(HaveValue(BeTrue()))
+		})
+
 		It("keeps a seccomp profile the user chose", func() {
 			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
 				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},

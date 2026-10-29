@@ -101,6 +101,15 @@ type RiakClusterSpec struct {
 	// group must match the image and the storage driver; there is no universal value).
 	// +optional
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
+
+	// ReadOnlyRootFilesystem makes the root filesystem of the Riak container read-only. The
+	// paths Riak writes outside the data volume (/etc/riak, /var/log/riak, /var/run/riak, /tmp)
+	// become emptyDir volumes, and an init container seeds /etc/riak from the image. Log files and
+	// the generated riak.conf are then lost when a pod restarts, which is fine: the entrypoint
+	// regenerates riak.conf and the console log is on the container's stdout. Off by default;
+	// enabling it on an existing cluster rolls the pods once.
+	// +optional
+	ReadOnlyRootFilesystem bool `json:"readOnlyRootFilesystem,omitempty"`
 }
 
 // Pod anti-affinity modes for RiakClusterSpec.PodAntiAffinity.
