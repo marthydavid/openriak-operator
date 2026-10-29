@@ -141,12 +141,12 @@ default because it would break OpenShift's UID assignment.
     | OpenShift/OKD 4 (Kubernetes 1.35, `restricted-v2`) | LVMS | Works with no `podSecurityContext`; the SCC assigned UID and `fsGroup` |
     | k3s 1.35 (the RKE2 family), amd64 | `local-path` | Works with and without `fsGroup` (996 here) |
     | Kubernetes 1.37 (kind), arm64 | `local-path` | Works with and without `fsGroup` (999 here; it was not applied) |
+    | Kubernetes 1.37 (kind), arm64 | `local` PV on a root-owned `0755` directory (what a CSI block volume looks like) | **Without `fsGroup`: Riak exits during startup** (`Cuttlefish failed`, `ERROR: Riak exited during startup`). **With `fsGroup: 999`: starts**; the kubelet made the volume `root:riak` setgid |
 
     The `riak` group differs by image build (996 vs 999 above), so always read it from your image.
-    `local-path` creates world-writable volumes, so these runs do not reproduce the
-    `Permission denied` failure. That needs a driver that creates root-owned, non-writable volumes (CSI
-    block volumes such as Azure Disk on AKS). **AKS was not run:** its `fsGroup` guidance is documented
-    from how Azure Disk and the kubelet behave, not from a cluster.
+    `local-path` creates world-writable volumes, so those runs do not need `fsGroup`; the `local` PV row is
+    the one that reproduces the failure and its fix. **AKS was not run:** its `fsGroup` guidance is
+    documented from how Azure Disk and the kubelet behave, not from a cluster.
 
 ## Storage
 
