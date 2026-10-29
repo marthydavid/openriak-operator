@@ -8,4 +8,5 @@ config/crd/bases/
 config/rbac/
 charts/openriak-operator/templates/crds.yaml
 **/zz_generated.*
+docs/assets/
 graphify-out/
