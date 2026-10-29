@@ -138,8 +138,10 @@ The entrypoint regenerates the config at every start and the console log goes to
 so nothing is lost that Riak needs. Do not enable it through an admission policy that mutates the pod
 instead of this field: without the scratch volumes Riak will not start.
 
-Tested on Kubernetes 1.37 (kind): a pod with exactly these mounts started, wrote its data directories to
-the PVC and rejected a write to `/usr` ("Read-only file system"). Not yet run on OpenShift, AKS or RKE2.
+Tested as a plain pod with exactly these mounts (not yet through the operator, and not with `spec.tls`) on
+OpenShift/OKD 4 (`restricted-v2`, LVMS), k3s 1.35 (`local-path`) and Kubernetes 1.37 (kind): it started,
+wrote its data directories to the PVC and rejected a write to `/usr` ("Read-only file system"). AKS and
+RKE2 with a CSI class were not run.
 
 !!! success "Verified"
     Each run was a Riak 3.2.6 pod with exactly the security settings above on a fresh PVC; Riak started
