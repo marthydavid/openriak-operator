@@ -144,6 +144,8 @@ default because it would break OpenShift's UID assignment.
     | Kubernetes 1.37 (kind), arm64 | `local` PV on a root-owned `0755` directory (what a CSI block volume looks like) | **Without `fsGroup`: Riak exits during startup** (`Cuttlefish failed`, `ERROR: Riak exited during startup`). **With `fsGroup: 999`: starts**; the kubelet made the volume `root:riak` setgid |
 
     The `riak` group differs by image build (996 vs 999 above), so always read it from your image.
+    To check your own platform or StorageClass, run `hack/verify-fsgroup.sh --context <ctx> --storage-class <sc>`
+    (add `--openshift` on OpenShift); it creates and removes a throwaway namespace.
     `local-path` creates world-writable volumes, so those runs do not need `fsGroup`; the `local` PV row is
     the one that reproduces the failure and its fix. **AKS was not run:** its `fsGroup` guidance is
     documented from how Azure Disk and the kubelet behave, not from a cluster.
