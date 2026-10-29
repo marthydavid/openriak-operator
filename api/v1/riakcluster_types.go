@@ -110,6 +110,59 @@ type RiakClusterSpec struct {
 	// enabling it on an existing cluster rolls the pods once.
 	// +optional
 	ReadOnlyRootFilesystem bool `json:"readOnlyRootFilesystem,omitempty"`
+
+	// Rollout controls how the Riak nodes are restarted when the pod template changes (an
+	// operator upgrade, a new image, spec.riakConfig, ...). The operator restarts one node at a
+	// time, highest ordinal first (the seed pod <name>-0 last), and only when the cluster is
+	// settled: every node Ready and a valid ring member and, unless disabled, no handoff or
+	// ownership transfers running. This is what Riak needs to keep its replicas in place while a
+	// node is away.
+	// +optional
+	Rollout *RolloutConfig `json:"rollout,omitempty"`
+
+	// TerminationGracePeriodSeconds is how long a Riak pod gets to stop cleanly (`riak stop`,
+	// flushing the vnodes) before it is killed. A killed node needs crash recovery on its next
+	// start, which is slow on large nodes, so raise it for big data sets.
+	// +kubebuilder:validation:Minimum=30
+	// +kubebuilder:default=300
+	// +optional
+	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty"`
+
+	// PodDisruptionBudget creates a PodDisruptionBudget allowing one Riak pod of this cluster to
+	// be unavailable at a time, so node drains and cluster upgrades cannot take down two Riak
+	// nodes at once. Enabled by default.
+	// +optional
+	PodDisruptionBudget *PodDisruptionBudgetConfig `json:"podDisruptionBudget,omitempty"`
+}
+
+// RolloutConfig tunes the operator-driven rolling restart.
+type RolloutConfig struct {
+	// WaitForTransfers makes the operator wait, before it restarts the next node, until
+	// `riak-admin transfers` reports no active or pending transfers. Turn it off only on clusters
+	// where a transfer may never finish and a node going away with replicas still moving is
+	// acceptable. Defaults to true.
+	// +kubebuilder:default=true
+	// +optional
+	WaitForTransfers *bool `json:"waitForTransfers,omitempty"`
+
+	// Paused stops the rollout after the node being restarted: no further node is restarted until
+	// it is set back to false.
+	// +optional
+	Paused bool `json:"paused,omitempty"`
+
+	// StallTimeout is how long the rollout may wait for the cluster to settle before the
+	// RolloutStalled condition is set to True. The rollout keeps waiting; it never forces a
+	// restart. Defaults to 30m.
+	// +optional
+	StallTimeout *metav1.Duration `json:"stallTimeout,omitempty"`
+}
+
+// PodDisruptionBudgetConfig configures the PodDisruptionBudget of a RiakCluster.
+type PodDisruptionBudgetConfig struct {
+	// Enabled creates the PodDisruptionBudget. Defaults to true.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // Pod anti-affinity modes for RiakClusterSpec.PodAntiAffinity.

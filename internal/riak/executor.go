@@ -192,6 +192,31 @@ func parseMemberStatus(output string) []ClusterMember {
 	return members
 }
 
+// TransfersIdle reports whether `riak-admin transfers` shows no active or pending handoff or
+// ownership transfers, as seen from podName, plus the output folded onto one line for messages.
+// Output it does not recognise counts as not idle: a rollout that gates on this must never
+// proceed on a reply it cannot read.
+func (e *Executor) TransfersIdle(ctx context.Context, namespace, podName, containerName string) (bool, string, error) {
+	out, err := e.ExecuteRiakAdmin(ctx, namespace, podName, containerName, "transfers")
+	if err != nil {
+		return false, "", err
+	}
+	return parseTransfersIdle(out), compactOutput(out), nil
+}
+
+// parseTransfersIdle recognises the two shapes of `riak-admin transfers`: "No transfers active"
+// when nothing is moving, and otherwise lines such as "'riak@n1' waiting to handoff 3 partitions"
+// and an "Active Transfers:" section.
+func parseTransfersIdle(out string) bool {
+	lower := strings.ToLower(out)
+	if strings.Contains(lower, "waiting to handoff") ||
+		strings.Contains(lower, "active transfers:") ||
+		strings.Contains(lower, "transfer type") {
+		return false
+	}
+	return strings.Contains(lower, "no transfers active")
+}
+
 // JoinCluster stages a join of podName's node into the ring that contains
 // targetNode. riak-admin must run on the joining node.
 func (e *Executor) JoinCluster(ctx context.Context, namespace, podName, containerName, targetNode string) error {

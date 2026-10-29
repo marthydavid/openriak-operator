@@ -83,6 +83,11 @@ spec:
 | `servicePort` | int, 1024–65535 | `8087` | Port of the protobuf service |
 | `nodeSelector` | map | — | Restrict nodes the pods can schedule on |
 | `podAntiAffinity` | `Required` \| `Preferred` \| `None` | `Required` | How Riak pods spread over Kubernetes nodes; see [below](#running-more-riak-nodes-than-kubernetes-nodes) |
+| `rollout.waitForTransfers` | bool | `true` | Wait for `riak-admin transfers` to report no active or pending transfers before restarting the next node; see [Rolling updates](#rolling-updates) |
+| `rollout.paused` | bool | `false` | Stop the rollout after the node being restarted |
+| `rollout.stallTimeout` | duration | `30m` | After this long waiting, the `RolloutStalled` condition is set (the rollout keeps waiting) |
+| `terminationGracePeriodSeconds` | int, ≥ 30 | `300` | How long a Riak pod gets to stop cleanly before it is killed |
+| `podDisruptionBudget.enabled` | bool | `true` | A PodDisruptionBudget allowing one unavailable Riak pod |
 | `readOnlyRootFilesystem` | bool | `false` | Read-only root filesystem for the Riak container, with `emptyDir` scratch volumes; see [below](#readonlyrootfilesystem) |
 | `podSecurityContext` | Kubernetes `PodSecurityContext` | seccomp `RuntimeDefault` only | Pod security context of the Riak pods, mainly `fsGroup` for a fresh PVC; see [Pod security](#pod-security-and-volume-ownership) |
 
@@ -255,7 +260,7 @@ kubectl get riakcluster
 |-------|---------|
 | `phase` | `Creating`, `Ready`, `Updating`, `Failed` |
 | `readyNodes` / `totalNodes` | Ready pods out of `spec.size` |
-| `conditions` | `Ready` condition with reason and message |
+| `conditions` | `Ready` with reason and message; during a rolling update also `UpdateInProgress`, `RolloutBlocked` (why the next node is not restarted yet) and `RolloutStalled` |
 | `members[]`, `nodeConditions[]` | Per node: `ready`, `health` (`Healthy`/`Unhealthy`/`Unknown`), `phase`, `storageReady`, storage class/size |
 | `securityEnabled` | Riak security has been enabled (done once, when the first user is created) |
 | `storageClassName`, `storageSize`, `ephemeralStorage` | The storage actually in use |
@@ -268,8 +273,50 @@ Status is recomputed from live pods, PVCs and certificates about every 10 second
 ## Scaling and updates
 
 - Change `spec.size` to add or remove nodes.
-- Changing `image`, `riakConfig`, `resources` or `tls` triggers a rolling update of the StatefulSet.
+- Changing `image`, `riakConfig`, `resources`, `tls` or anything else in the pod template triggers a
+  [rolling update](#rolling-updates).
 - At fleet scale see [Scaling](../scaling.md).
+
+## Rolling updates
+
+A pod-template change (an operator upgrade that changes the pods, a new image, `riakConfig`, ...) restarts
+the Riak nodes **one at a time, and only when the cluster is settled**, the way Strimzi and CloudNativePG
+restart their members. Kubernetes' own rolling update moves on as soon as a pod is Ready, which for Riak only
+means port 8087 accepts connections: handoff to the node that just came back may still be running, and
+restarting the next node would take a second replica of some partitions away.
+
+The operator keeps the StatefulSet's `rollingUpdate.partition` at `spec.size`, so a template change restarts
+nothing by itself, and lowers it by one when the cluster is settled:
+
+1. every pod is Ready and every node is a `valid` member of one ring (`riak-admin member-status`), and
+2. unless `spec.rollout.waitForTransfers` is `false`, `riak-admin transfers` reports no active or pending
+   handoff or ownership transfers (output it cannot read counts as busy), and
+3. the node restarted before is Ready and on the new revision.
+
+The highest ordinal is restarted first and the seed pod `<name>-0` last. A pod gets
+`spec.terminationGracePeriodSeconds` (300 s by default) to run `riak stop`; a node that is killed instead needs
+crash recovery on its next start. A PodDisruptionBudget (`maxUnavailable: 1`) stops node drains from taking
+down a second Riak node while one is already away.
+
+Watch it in the status conditions:
+
+```bash
+kubectl get riakcluster my-cluster -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+- `UpdateInProgress`: a rollout is running (`Restarting`, `Waiting` or `Finishing`).
+- `RolloutBlocked`: the next node is not restarted yet, with the reason (for example
+  `waiting for handoff and ownership transfers to finish: 'riak@...' waiting to handoff 4 partitions`).
+- `RolloutStalled`: it has been blocked longer than `spec.rollout.stallTimeout`. The operator **keeps waiting
+  and never forces a restart**: look at `riak-admin transfers` and `member-status` on the cluster. If a
+  transfer will never finish and you accept the risk, set `spec.rollout.waitForTransfers: false`.
+
+Set `spec.rollout.paused: true` to stop after the node being restarted, for example to check the new
+version before the rest of the cluster follows.
+
+Tune how fast transfers finish with `riakConfig.transfer_limit` (see [Riak configuration](#riak-configuration)).
+Existing clusters are rolled once by the operator upgrade that introduces this; the rollout then follows the
+rules above.
 
 ## Deleting
 

@@ -727,3 +727,48 @@ func TestAddSecuritySource_propagatesError(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 }
+
+func TestParseTransfersIdle(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		idle bool
+	}{
+		{"idle", "No transfers active", true},
+		{"idle with trailing newline", "No transfers active\n", true},
+		{"pending handoff", "'riak@n1' waiting to handoff 3 partitions\n", false},
+		{"active transfer", "Active Transfers:\n\ntransfer type: ownership_handoff\nvnode type: riak_kv_vnode\n", false},
+		{"pending even if the idle line is also printed", "No transfers active\n'riak@n1' waiting to handoff 1 partitions", false},
+		{"empty output is not proof of idleness", "", false},
+		{"unrecognised output is not proof of idleness", "something else", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := parseTransfersIdle(c.out); got != c.idle {
+				t.Errorf("parseTransfersIdle(%q) = %v, want %v", c.out, got, c.idle)
+			}
+		})
+	}
+}
+
+func TestTransfersIdle_runsRiakAdminTransfers(t *testing.T) {
+	var got string
+	e := NewExecutorWithRunner(logr.Discard(), func(_ context.Context, _ string, args ...string) (string, error) {
+		got = strings.Join(args, " ")
+		return "No transfers active", nil
+	})
+	idle, detail, err := e.TransfersIdle(context.Background(), "ns", "c-0", "riak")
+	if err != nil || !idle || detail != "No transfers active" {
+		t.Fatalf("TransfersIdle() = %v, %q, %v", idle, detail, err)
+	}
+	if !strings.HasSuffix(got, "riak-admin transfers") {
+		t.Errorf("ran %q, want a riak-admin transfers call", got)
+	}
+
+	e = NewExecutorWithRunner(logr.Discard(), func(context.Context, string, ...string) (string, error) {
+		return "", errors.New("boom")
+	})
+	if idle, _, err := e.TransfersIdle(context.Background(), "ns", "c-0", "riak"); err == nil || idle {
+		t.Errorf("an exec failure must be an error and not idle, got idle=%v err=%v", idle, err)
+	}
+}
