@@ -240,3 +240,21 @@ cannot be changed on an existing cluster; recreate it.
 Releases (operator `v*` tag + chart `chart-v*` tag, version bumps across all references, release
 notes, CI verification) are described in the `release` skill: `.claude/skills/release/SKILL.md`.
 Ask Claude to "cut a release" and it follows that skill. Always release from `main`.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Setup: `uv tool install graphifyy` (PyPI name has two y's; or `pipx install graphifyy`), then `make graph`
+(`graphify update .`; tree-sitter AST only, no API key, a few seconds). `graphify-out/` is gitignored, so each
+checkout builds its own; `graphify hook install` adds git hooks that rebuild it on commit/checkout/merge.
+`.graphifyignore` keeps CI workflows, generated CRDs/RBAC and `.claude/` out of the graph. The PreToolUse
+hooks in `.claude/settings.json` no-op when graphify is not installed.
+
+Rules:
+- When graphify-out/graph.json exists, run `graphify query "<question>"` before your first grep, search or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- If graphify-out/graph.json is missing, run `make graph` first (or fall back to grep when graphify is not installed).
+- Check freshness with the "Built from commit" line in GRAPH_REPORT.md against `git rev-parse HEAD`.

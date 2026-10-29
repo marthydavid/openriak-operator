@@ -1,0 +1,11 @@
+# Paths graphify leaves out of the knowledge graph (gitignore syntax; .gitignore is also honoured).
+# Generated, CI and agent-local files add hub noise without explaining how the operator works.
+.claude/
+.github/
+.golangci.yml
+renovate.json
+config/crd/bases/
+config/rbac/
+charts/openriak-operator/templates/crds.yaml
+**/zz_generated.*
+graphify-out/

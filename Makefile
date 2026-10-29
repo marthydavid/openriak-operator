@@ -92,6 +92,11 @@ lint: golangci-lint ## Run golangci-lint linter
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
 
+.PHONY: graph
+graph: ## Build the graphify knowledge graph into graphify-out/ (code only, no API key; needs `uv tool install graphifyy`).
+	@command -v graphify >/dev/null 2>&1 || { echo "graphify not found: uv tool install graphifyy (or pipx install graphifyy)"; exit 1; }
+	graphify update .
+
 ##@ Build
 
 .PHONY: build
