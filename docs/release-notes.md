@@ -1,5 +1,47 @@
 # Release notes
 
+## Operator 1.1.0 / chart 1.1.0
+
+Riak pods can now start on a freshly provisioned volume under a non-root image, and the Riak container is
+hardened by default. This release changes the `RiakCluster` CRD (two new optional fields), so
+`helm upgrade` applies a new schema; if you manage CRDs yourself, apply `config/crd/bases` from the `v1.1.0`
+tag first.
+
+!!! warning "Existing clusters roll once on upgrade"
+    The always-on hardening below changes the pod template, so each existing `RiakCluster` restarts its
+    pods once (one at a time, as for any StatefulSet change) after the operator is upgraded.
+
+### Fixes
+
+- **Non-root Riak could not write a fresh PVC** ([#105](https://github.com/marthydavid/openriak-operator/issues/105),
+  [#106](https://github.com/marthydavid/openriak-operator/pull/106)). On a CSI driver that creates root-owned
+  volumes the pod exited during startup. New optional **`spec.podSecurityContext`** (a standard
+  `PodSecurityContext`) is applied to the Riak pods; set `fsGroup` (and usually
+  `fsGroupChangePolicy: OnRootMismatch`) to the `riak` group of your image. Nothing is defaulted for UID, GID or
+  `fsGroup`: they depend on the image and the storage driver, and on OpenShift the SCC assigns them, so leave
+  the field unset there. See
+  [Pod security and volume ownership](crds/riakcluster.md#pod-security-and-volume-ownership).
+
+### New
+
+- **`spec.readOnlyRootFilesystem`** (default `false`): read-only root filesystem for the Riak container, with
+  `emptyDir` volumes for `/etc/riak`, `/var/log/riak`, `/var/run/riak` and `/tmp`, and a read-only,
+  unprivileged init container that seeds `/etc/riak` from the image. Enabling it on an existing cluster rolls
+  the pods once. Run on OpenShift, k3s and kind as a plain pod; not yet run through the operator with
+  `spec.tls`.
+- **`hack/verify-fsgroup.sh`** checks a StorageClass with the hardened pod, with and without `fsGroup`, so you
+  can verify a platform (AKS, RKE2, ...) yourself.
+
+### Changes you may notice
+
+- Riak pods always get seccomp `RuntimeDefault` (unless you set your own profile in `podSecurityContext`), and
+  the Riak container gets `allowPrivilegeEscalation: false` and all capabilities dropped. This is why existing
+  clusters roll once. No fixed UID or group is set, so OpenShift's `restricted-v2` SCC keeps working without
+  grants.
+- Verified: OpenShift/OKD 4 (`restricted-v2`, LVMS), k3s 1.35 and kind 1.37 (`local-path`), and the original
+  failure and its `fsGroup` fix on a root-owned volume. **Not run:** AKS (Azure Disk CSI) and RKE2 with a CSI
+  storage class; their `fsGroup` guidance rests on platform behaviour.
+
 ## Operator 1.0.0 / chart 1.0.0
 
 The first stable release. It adds client certificates from an **external CA**, lets a cluster have more Riak
