@@ -153,6 +153,18 @@ spec:
                 - Preferred
                 - None
                 type: string
+              podDisruptionBudget:
+                description: |-
+                  PodDisruptionBudget creates a PodDisruptionBudget allowing one Riak pod of this cluster to
+                  be unavailable at a time, so node drains and cluster upgrades cannot take down two Riak
+                  nodes at once. Enabled by default.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enabled creates the PodDisruptionBudget. Defaults
+                      to true.
+                    type: boolean
+                type: object
               podSecurityContext:
                 description: |-
                   PodSecurityContext is applied to the generated Riak pods. Leave it unset to keep the
@@ -475,6 +487,35 @@ spec:
                   Bind buckets to a multi_backend entry via
                   RiakBucket.spec.properties ("backend": "<name>").
                 type: object
+              rollout:
+                description: |-
+                  Rollout controls how the Riak nodes are restarted when the pod template changes (an
+                  operator upgrade, a new image, spec.riakConfig, ...). The operator restarts one node at a
+                  time, highest ordinal first (the seed pod <name>-0 last), and only when the cluster is
+                  settled: every node Ready and a valid ring member and, unless disabled, no handoff or
+                  ownership transfers running. This is what Riak needs to keep its replicas in place while a
+                  node is away.
+                properties:
+                  paused:
+                    description: |-
+                      Paused stops the rollout after the node being restarted: no further node is restarted until
+                      it is set back to false.
+                    type: boolean
+                  stallTimeout:
+                    description: |-
+                      StallTimeout is how long the rollout may wait for the cluster to settle before the
+                      RolloutStalled condition is set to True. The rollout keeps waiting; it never forces a
+                      restart. Defaults to 30m.
+                    type: string
+                  waitForTransfers:
+                    default: true
+                    description: |-
+                      WaitForTransfers makes the operator wait, before it restarts the next node, until
+                      `riak-admin transfers` reports no active or pending transfers. Turn it off only on clusters
+                      where a transfer may never finish and a node going away with replicas still moving is
+                      acceptable. Defaults to true.
+                    type: boolean
+                type: object
               servicePort:
                 description: ServicePort is the port for the Riak protocol service.
                 format: int32
@@ -498,6 +539,15 @@ spec:
                   (e.g., 10Gi).
                 pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                 x-kubernetes-int-or-string: true
+              terminationGracePeriodSeconds:
+                default: 300
+                description: |-
+                  TerminationGracePeriodSeconds is how long a Riak pod gets to stop cleanly (`riak stop`,
+                  flushing the vnodes) before it is killed. A killed node needs crash recovery on its next
+                  start, which is slow on large nodes, so raise it for big data sets.
+                format: int64
+                minimum: 30
+                type: integer
               tls:
                 description: TLS configuration for inter-node communication.
                 properties:

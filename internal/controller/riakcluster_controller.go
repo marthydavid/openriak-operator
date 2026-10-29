@@ -69,6 +69,7 @@ type RiakClusterReconciler struct {
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakbuckets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=riak.openriak.io,resources=riakusers,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
@@ -151,6 +152,18 @@ func (r *RiakClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.reconcileService(ctx, cluster); err != nil {
 		log.Error(err, "failed to reconcile Service")
 		return ctrl.Result{}, err
+	}
+
+	// A PodDisruptionBudget keeps node drains from taking two Riak nodes down at once.
+	if err := r.reconcilePodDisruptionBudget(ctx, cluster); err != nil {
+		log.Error(err, "failed to reconcile PodDisruptionBudget")
+		return ctrl.Result{}, err
+	}
+
+	// Drive a pending pod-template change forward one node at a time (see rollout.go).
+	// Not fatal: the next requeue retries, and nothing restarts while it fails.
+	if err := r.reconcileRollout(ctx, cluster); err != nil {
+		log.Error(err, "failed to reconcile the rolling update")
 	}
 
 	// Create the PodMonitor/ServiceMonitor (spec.monitoring.scrapeKind) when
@@ -396,7 +409,14 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
+		// sts holds the live object here; capture what the rollout needs before the spec is
+		// replaced below.
+		partition := stsPartition(sts, cluster.Spec.Size)
 		sts.Spec = appsv1.StatefulSetSpec{
+			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
+				Type:          appsv1.RollingUpdateStatefulSetStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &partition},
+			},
 			ServiceName: cluster.Name + "-headless",
 			Replicas:    &cluster.Spec.Size,
 			Selector: &metav1.LabelSelector{
@@ -469,7 +489,7 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 							},
 						},
 					}, monitoringSidecars(cluster)...),
-					TerminationGracePeriodSeconds: ptr(int64(60)),
+					TerminationGracePeriodSeconds: ptr(terminationGracePeriod(cluster)),
 					Affinity:                      riakAffinity(cluster),
 				},
 			},
@@ -539,6 +559,15 @@ func riakContainerSecurityContext(readOnlyRoot bool) *corev1.SecurityContext {
 		sc.ReadOnlyRootFilesystem = ptr(true)
 	}
 	return sc
+}
+
+// terminationGracePeriod is how long a Riak pod gets to stop (spec.terminationGracePeriodSeconds,
+// 300 s when unset): a node killed mid-stop needs crash recovery on its next start.
+func terminationGracePeriod(cluster *riakv1.RiakCluster) int64 {
+	if g := cluster.Spec.TerminationGracePeriodSeconds; g != nil {
+		return *g
+	}
+	return 300
 }
 
 // riakAffinity builds the pod affinity of the Riak pods from spec.podAntiAffinity: Required (the
