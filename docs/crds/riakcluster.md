@@ -99,7 +99,7 @@ platform): pod `seccompProfile: RuntimeDefault`, and on the Riak container
 
 | Platform | What to set |
 |----------|-------------|
-| **OpenShift / OKD** (`restricted-v2`) | **Nothing.** The SCC assigns a UID and an `fsGroup` from the namespace range. Setting a fixed `fsGroup` or `runAsUser` outside that range is rejected. |
+| **OpenShift / OKD** (`restricted-v2`) | **Nothing.** The SCC assigns a UID and an `fsGroup` from the namespace range. A fixed `fsGroup` or `runAsUser` outside that range is not allowed by `restricted-v2` for ordinary service accounts (needs another SCC). |
 | **AKS** (Azure Disk CSI, `managed-csi`) | `fsGroup: <riak gid>`. Azure Disk honours `fsGroup`. Azure Files ignores it: use a StorageClass with `uid=`/`gid=` mount options. |
 | **RKE2 / k3s** | `fsGroup: <riak gid>` for CSI drivers that support it (Longhorn, Ceph). Rancher `local-path` ignores `fsGroup`; use a CSI class, or pre-own the host path. |
 | **Other (EKS, GKE, kind, ...)** | `fsGroup: <riak gid>` when the driver advertises `fsGroupPolicy: File` or `ReadWriteOnceWithFSType`. |
@@ -131,6 +131,12 @@ default because it would break OpenShift's UID assignment.
     tested. Until then, rely on the dropped capabilities, no privilege escalation and the seccomp
     profile above, and do not set `readOnlyRootFilesystem: true` through other means (for example a
     policy mutating the pod): Riak will not start.
+
+!!! success "Verified"
+    OpenShift/OKD 4 (Kubernetes 1.35, `restricted-v2`, LVMS StorageClass): a Riak 3.2.6 pod with exactly
+    the security settings above, no `podSecurityContext` and a freshly provisioned PVC started and wrote
+    to `/var/lib/riak` as an SCC-assigned UID. AKS and RKE2 are documented from the platforms'
+    `fsGroup` behaviour and have not been run.
 
 ## Storage
 

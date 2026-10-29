@@ -27,7 +27,7 @@ entrypoint never `mkdir`/`chown`s at runtime.
 No `anyuid`, `privileged` or custom SCC is needed for the operator either.
 
 Leave `spec.podSecurityContext` unset on OpenShift: the SCC assigns the UID and the `fsGroup` that
-makes a fresh PVC writable, and a fixed value outside the namespace range is rejected. See
+makes a fresh PVC writable, and `restricted-v2` does not allow a fixed value outside the namespace range. See
 [Pod security and volume ownership](../crds/riakcluster.md#pod-security-and-volume-ownership), which
 also explains why `readOnlyRootFilesystem` is not enabled.
 
