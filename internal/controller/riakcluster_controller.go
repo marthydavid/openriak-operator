@@ -395,8 +395,9 @@ func (r *RiakClusterReconciler) reconcileStatefulSet(ctx context.Context, cluste
 					},
 				},
 				Spec: corev1.PodSpec{
-					NodeSelector: cluster.Spec.NodeSelector,
-					Volumes:      podVolumes,
+					NodeSelector:    cluster.Spec.NodeSelector,
+					SecurityContext: cluster.Spec.PodSecurityContext,
+					Volumes:         podVolumes,
 					Containers: append([]corev1.Container{
 						{
 							Name:            "riak",

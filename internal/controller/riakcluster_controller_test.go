@@ -1089,6 +1089,56 @@ var _ = Describe("RiakCluster Controller", func() {
 		})
 	})
 
+	Context("pod security context", func() {
+		const clusterName = "podsc-cluster"
+		nn := types.NamespacedName{Name: clusterName, Namespace: ns}
+
+		AfterEach(func() { cleanupCluster(clusterName) })
+
+		podSC := func() *corev1.PodSecurityContext {
+			sts := &appsv1.StatefulSet{}
+			Expect(k8sClient.Get(ctx, nn, sts)).To(Succeed())
+			return sts.Spec.Template.Spec.SecurityContext
+		}
+
+		It("leaves the pod security context unset by default", func() {
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec:       riakv1.RiakClusterSpec{Size: 1, Image: "basho/riak-kv:latest"},
+			})).To(Succeed())
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			// The API server defaults an empty pod securityContext to {}; nothing may be set in it.
+			Expect(podSC()).To(Or(BeNil(), Equal(&corev1.PodSecurityContext{})))
+		})
+
+		It("propagates fsGroup and fsGroupChangePolicy, and follows later changes", func() {
+			group := int64(1000)
+			policy := corev1.FSGroupChangeOnRootMismatch
+			Expect(k8sClient.Create(ctx, &riakv1.RiakCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: clusterName, Namespace: ns},
+				Spec: riakv1.RiakClusterSpec{
+					Size: 1, Image: "basho/riak-kv:latest",
+					PodSecurityContext: &corev1.PodSecurityContext{FSGroup: &group, FSGroupChangePolicy: &policy},
+				},
+			})).To(Succeed())
+			_, err := reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			sc := podSC()
+			Expect(sc.FSGroup).To(HaveValue(Equal(int64(1000))))
+			Expect(sc.FSGroupChangePolicy).To(HaveValue(Equal(corev1.FSGroupChangeOnRootMismatch)))
+
+			c := &riakv1.RiakCluster{}
+			Expect(k8sClient.Get(ctx, nn, c)).To(Succeed())
+			other := int64(2000)
+			c.Spec.PodSecurityContext.FSGroup = &other
+			Expect(k8sClient.Update(ctx, c)).To(Succeed())
+			_, err = reconcileCluster(ctx, clusterName, ns)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(podSC().FSGroup).To(HaveValue(Equal(int64(2000))))
+		})
+	})
+
 	Context("reconcileService labels", func() {
 		const clusterName = "svc-label-cluster"
 

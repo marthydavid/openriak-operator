@@ -94,6 +94,13 @@ type RiakClusterSpec struct {
 	// +kubebuilder:default=Required
 	// +optional
 	PodAntiAffinity string `json:"podAntiAffinity,omitempty"`
+
+	// PodSecurityContext is applied to the generated Riak pods. Leave it unset to keep the
+	// image's own user and the volume's ownership as they are. A freshly provisioned PVC replaces
+	// the image's /var/lib/riak, so a non-root image needs an fsGroup it can write through (the
+	// group must match the image and the storage driver; there is no universal value).
+	// +optional
+	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
 }
 
 // Pod anti-affinity modes for RiakClusterSpec.PodAntiAffinity.
