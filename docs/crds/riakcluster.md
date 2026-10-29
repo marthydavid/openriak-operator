@@ -101,7 +101,7 @@ platform): pod `seccompProfile: RuntimeDefault`, and on the Riak container
 |----------|-------------|
 | **OpenShift / OKD** (`restricted-v2`) | **Nothing.** The SCC assigns a UID and an `fsGroup` from the namespace range. A fixed `fsGroup` or `runAsUser` outside that range is not allowed by `restricted-v2` for ordinary service accounts (needs another SCC). |
 | **AKS** (Azure Disk CSI, `managed-csi`) | `fsGroup: <riak gid>`. Azure Disk honours `fsGroup`. Azure Files ignores it: use a StorageClass with `uid=`/`gid=` mount options. |
-| **RKE2 / k3s** | `fsGroup: <riak gid>` for CSI drivers that support it (Longhorn, Ceph). Rancher `local-path` ignores `fsGroup`; use a CSI class, or pre-own the host path. |
+| **RKE2 / k3s** | Rancher `local-path` (the default) creates world-writable volumes, so a fresh PVC works with no `fsGroup`; setting one is honoured and harmless. For CSI drivers (Longhorn, Ceph, ...) set `fsGroup: <riak gid>`. |
 | **Other (EKS, GKE, kind, ...)** | `fsGroup: <riak gid>` when the driver advertises `fsGroupPolicy: File` or `ReadWriteOnceWithFSType`. |
 
 The group is that of the `riak` user in the image you run. It is not the same for every base, so
@@ -133,10 +133,20 @@ default because it would break OpenShift's UID assignment.
     policy mutating the pod): Riak will not start.
 
 !!! success "Verified"
-    OpenShift/OKD 4 (Kubernetes 1.35, `restricted-v2`, LVMS StorageClass): a Riak 3.2.6 pod with exactly
-    the security settings above, no `podSecurityContext` and a freshly provisioned PVC started and wrote
-    to `/var/lib/riak` as an SCC-assigned UID. AKS and RKE2 are documented from the platforms'
-    `fsGroup` behaviour and have not been run.
+    Each run was a Riak 3.2.6 pod with exactly the security settings above on a fresh PVC; Riak started
+    and wrote to `/var/lib/riak`.
+
+    | Platform | Storage | Result |
+    |----------|---------|--------|
+    | OpenShift/OKD 4 (Kubernetes 1.35, `restricted-v2`) | LVMS | Works with no `podSecurityContext`; the SCC assigned UID and `fsGroup` |
+    | k3s 1.35 (the RKE2 family), amd64 | `local-path` | Works with and without `fsGroup` (996 here) |
+    | Kubernetes 1.37 (kind), arm64 | `local-path` | Works with and without `fsGroup` (999 here; it was not applied) |
+
+    The `riak` group differs by image build (996 vs 999 above), so always read it from your image.
+    `local-path` creates world-writable volumes, so these runs do not reproduce the
+    `Permission denied` failure. That needs a driver that creates root-owned, non-writable volumes (CSI
+    block volumes such as Azure Disk on AKS). **AKS was not run:** its `fsGroup` guidance is documented
+    from how Azure Disk and the kubelet behave, not from a cluster.
 
 ## Storage
 
