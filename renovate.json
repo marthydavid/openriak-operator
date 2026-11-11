@@ -17,11 +17,11 @@
     "gomodTidy"
   ],
   "constraints": {
-    "go": "1.25"
+    "go": "1.25.14"
   },
   "packageRules": [
     {
-      "description": "Only offer module versions that build on the Go line this repo targets (constraints.go below). constraints.go alone just picks the toolchain Renovate runs; without strict filtering it would still propose a dependency whose own go.mod requires a newer Go. This only covers the gomod manager: tools pinned in the Makefile need their own allowedVersions rule (see controller-tools).",
+      "description": "Only offer module versions that build on the Go line this repo targets (constraints.go above, which must be a full version: strict filtering rejects a bare 1.25 as an invalid constraint). constraints.go alone just picks the toolchain Renovate runs; without strict filtering it would still propose a dependency whose own go.mod requires a newer Go. This only covers the gomod manager: tools pinned in the Makefile need their own allowedVersions rule (see controller-tools).",
       "matchManagers": [
         "gomod"
       ],
