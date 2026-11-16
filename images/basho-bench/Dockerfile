@@ -1,6 +1,6 @@
 # Basho Bench from the OpenRiak fork, for load-testing Riak (including mTLS clusters).
 # See docs/basho-bench.md. Pinned to the commit of branch openriak-3.2 that was tested.
-FROM docker.io/library/erlang:26
+FROM docker.io/library/erlang:29
 
 ARG BASHO_BENCH_REF=6108848f46a57d315c1c7aa2d6010acc8258bcf2
 
